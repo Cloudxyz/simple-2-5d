@@ -45,6 +45,8 @@ interface EditorCanvasProps {
   onPolygonPointChange: (partId: string, pointIndex: number, nextPoint: Point) => void;
   onPolygonPointInsert: (partId: string, afterIndex: number, point: Point) => void;
   onPolygonPointDelete: (partId: string, pointIndex: number) => void;
+  onGroupDragBegin?: () => void;
+  onGroupDragEnd?: () => void;
 }
 
 interface HoveredEdge {
@@ -317,6 +319,8 @@ export default function EditorCanvas({
   onPolygonPointChange,
   onPolygonPointInsert,
   onPolygonPointDelete,
+  onGroupDragBegin,
+  onGroupDragEnd,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -515,6 +519,7 @@ export default function EditorCanvas({
       const imgPos = toImageCoords(pos.x, pos.y);
       if (shouldStartGroupDrag(imgPos)) {
         setGroupDragPointer(imgPos);
+        onGroupDragBegin?.();
         return;
       }
       setDragStart(imgPos);
@@ -702,6 +707,7 @@ export default function EditorCanvas({
 
     if (groupDragPointer) {
       setGroupDragPointer(null);
+      onGroupDragEnd?.();
     }
   }
 
@@ -710,6 +716,7 @@ export default function EditorCanvas({
     lastPointer.current = null;
     setDragStart(null);
     setDragCurrent(null);
+    if (groupDragPointer) onGroupDragEnd?.();
     setGroupDragPointer(null);
     setPenMousePos(null);
     setHoveredEdge(null);

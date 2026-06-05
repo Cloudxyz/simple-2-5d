@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useReducer } from "react";
 import Link from "next/link";
 import EditorCanvas from "./EditorCanvas";
 import PartsSidebar from "./PartsSidebar";
@@ -26,6 +26,49 @@ type SaveStatus = "idle" | "saved" | "empty" | "error";
 type LayerOrderBlock = { type: "group" | "part"; id: string; partIds: string[] };
 
 const LAST_SAVED_KEY = "simple2_5d_project_last_saved_at";
+
+interface HistoryEntry {
+  id: string;
+  label: string;
+  rig: CharacterRig;
+  timestamp: number;
+}
+
+const MAX_HISTORY = 50;
+
+type HistAction =
+  | { type: "commit"; entry: HistoryEntry }
+  | { type: "undo" }
+  | { type: "redo" }
+  | { type: "init"; rig: CharacterRig; label: string };
+
+interface HistReducerState {
+  entries: HistoryEntry[];
+  index: number;
+}
+
+function histReducer(state: HistReducerState, action: HistAction): HistReducerState {
+  switch (action.type) {
+    case "commit": {
+      const trimmed = state.entries.slice(0, state.index + 1);
+      const next = [...trimmed, action.entry].slice(-MAX_HISTORY);
+      return { entries: next, index: next.length - 1 };
+    }
+    case "undo":
+      return state.index > 0 ? { ...state, index: state.index - 1 } : state;
+    case "redo":
+      return state.index < state.entries.length - 1
+        ? { ...state, index: state.index + 1 }
+        : state;
+    case "init":
+      return {
+        entries: [{ id: crypto.randomUUID(), label: action.label, rig: action.rig, timestamp: Date.now() }],
+        index: 0,
+      };
+    default:
+      return state;
+  }
+}
 
 function formatSaveLabel(lastSavedAt: number | null, hasUnsavedChanges: boolean, now: number): string {
   if (!hasUnsavedChanges && lastSavedAt !== null) {
@@ -118,12 +161,54 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   // Prevents marking unsaved during the initial project load
   const initDoneRef = useRef(false);
 
+  const [hist, dispatchHist] = useReducer(histReducer, { entries: [], index: -1 });
+  const [pendingHistCommit, setPendingHistCommit] = useState<string | null>(null);
+
+  function commitRig(nextRig: CharacterRig, label: string) {
+    dispatchHist({
+      type: "commit",
+      entry: { id: crypto.randomUUID(), label, rig: nextRig, timestamp: Date.now() },
+    });
+    setRig(nextRig);
+  }
+
+  function handleUndo() {
+    if (hist.index <= 0) return;
+    const target = hist.entries[hist.index - 1];
+    dispatchHist({ type: "undo" });
+    setRig(target.rig);
+  }
+
+  function handleRedo() {
+    if (hist.index >= hist.entries.length - 1) return;
+    const target = hist.entries[hist.index + 1];
+    dispatchHist({ type: "redo" });
+    setRig(target.rig);
+  }
+
+  function handleHistoryJump(index: number) {
+    if (index < 0 || index >= hist.entries.length || index === hist.index) return;
+    const target = hist.entries[index];
+    if (index < hist.index) {
+      // undo to that index
+      for (let i = 0; i < hist.index - index; i++) dispatchHist({ type: "undo" });
+    } else {
+      for (let i = 0; i < index - hist.index; i++) dispatchHist({ type: "redo" });
+    }
+    setRig(target.rig);
+  }
+
   // Auto-load saved project on mount — skipped when freshStart is set (?new=1)
   useEffect(() => {
+    let initialRig: CharacterRig = { name: characterName, parts: [], imageDataUrl: null, groups: [] };
     if (!freshStart) {
       const saved = loadProject();
-      if (saved) setRig(saved);
+      if (saved) {
+        initialRig = saved;
+        setRig(saved);
+      }
     }
+    dispatchHist({ type: "init", rig: initialRig, label: "Initial state" });
     // Delay so the rig change effect above skips the initial load render
     const t = setTimeout(() => { initDoneRef.current = true; }, 0);
     return () => clearTimeout(t);
@@ -156,6 +241,44 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     }
   }, [activeTool]);
 
+  // Commit a single history entry after a drag operation that called setRig directly
+  useEffect(() => {
+    if (!pendingHistCommit) return;
+    const label = pendingHistCommit;
+    setPendingHistCommit(null);
+    const current = hist.index >= 0 ? hist.entries[hist.index] : null;
+    if (current && current.rig === rig) return;
+    dispatchHist({
+      type: "commit",
+      entry: { id: crypto.randomUUID(), label, rig, timestamp: Date.now() },
+    });
+  }, [pendingHistCommit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keyboard shortcuts for undo / redo
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const isCtrl = e.ctrlKey || e.metaKey;
+      if (!isCtrl) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        if (hist.index > 0) {
+          const target = hist.entries[hist.index - 1];
+          dispatchHist({ type: "undo" });
+          setRig(target.rig);
+        }
+      } else if ((e.key === "z" && e.shiftKey) || e.key === "y") {
+        e.preventDefault();
+        if (hist.index < hist.entries.length - 1) {
+          const target = hist.entries[hist.index + 1];
+          dispatchHist({ type: "redo" });
+          setRig(target.rig);
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [hist]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function handlePenAddPoint(pt: { x: number; y: number }) {
     setPenPoints((prev) => [...prev, pt]);
   }
@@ -183,7 +306,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   }
 
   function handleImageUpload(dataUrl: string) {
-    setRig((prev) => ({ ...prev, imageDataUrl: dataUrl }));
+    commitRig({ ...rig, imageDataUrl: dataUrl }, "Upload image");
   }
 
   function handleSave() {
@@ -203,9 +326,11 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   }
 
   function handleConfirmClear() {
+    const clearedRig: CharacterRig = { name: characterName, parts: [], imageDataUrl: null, groups: [] };
     clearProject();
     try { localStorage.removeItem(LAST_SAVED_KEY); } catch {}
-    setRig({ name: characterName, parts: [], imageDataUrl: null, groups: [] });
+    setRig(clearedRig);
+    dispatchHist({ type: "init", rig: clearedRig, label: "Clear project" });
     setSelectedPartId(null);
     setSelectedGroupId(null);
     setStageTransform({ x: 0, y: 0, scale: 1 });
@@ -221,9 +346,10 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
   function handleCreatePart(name: string) {
     if (!pendingBounds) return;
+    const partName = name.trim() || "Part";
     const newPart: Part = {
       id: crypto.randomUUID(),
-      name: name.trim() || "Part",
+      name: partName,
       bounds: pendingBounds,
       movementPoint: {
         x: Math.round(pendingBounds.x + pendingBounds.width / 2),
@@ -238,7 +364,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       rotation: 0,
       polygonPoints: penClosed && penPoints.length >= 3 ? [...penPoints] : null,
     };
-    setRig((prev) => ({ ...prev, parts: [...prev.parts, newPart] }));
+    commitRig({ ...rig, parts: [...rig.parts, newPart] }, `Create part: ${partName}`);
     setSelectedPartId(newPart.id);
     setSelectedGroupId(null);
     setPendingBounds(null);
@@ -289,28 +415,29 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   }
 
   function handleDeletePart(id: string) {
-    if (isPartEffectivelyLocked(rig.parts.find((p) => p.id === id), rig.groups)) return;
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts
-        .filter((p) => p.id !== id)
-        .map((p) => (p.parentId === id ? { ...p, parentId: null } : p)),
-    }));
+    const part = rig.parts.find((p) => p.id === id);
+    if (!part || isPartEffectivelyLocked(part, rig.groups)) return;
+    commitRig({
+      ...rig,
+      parts: rig.parts.filter((p) => p.id !== id).map((p) => (p.parentId === id ? { ...p, parentId: null } : p)),
+    }, `Delete part: ${part.name}`);
     if (selectedPartId === id) setSelectedPartId(null);
   }
 
   function handleToggleVisibility(id: string) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) => (p.id === id ? { ...p, isVisible: !p.isVisible } : p)),
-    }));
+    const part = rig.parts.find((p) => p.id === id);
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) => (p.id === id ? { ...p, isVisible: !p.isVisible } : p)),
+    }, `${part?.isVisible ? "Hide" : "Show"} part`);
   }
 
   function handleToggleLock(id: string) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) => (p.id === id ? { ...p, isLocked: !(p.isLocked ?? false) } : p)),
-    }));
+    const part = rig.parts.find((p) => p.id === id);
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) => (p.id === id ? { ...p, isLocked: !(p.isLocked ?? false) } : p)),
+    }, `${part?.isLocked ? "Unlock" : "Lock"} part`);
   }
 
   function handleCreateGroup() {
@@ -321,39 +448,34 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       isExpanded: true,
       isVisible: true,
     };
-    setRig((prev) => ({
-      ...prev,
-      groups: [...(prev.groups ?? []), newGroup],
-    }));
+    commitRig({ ...rig, groups: [...(rig.groups ?? []), newGroup] }, "Create folder");
   }
 
   function handleRenameGroup(groupId: string, name: string) {
     const nextName = name.trim();
     if (!nextName) return;
-    setRig((prev) => ({
-      ...prev,
-      groups: (prev.groups ?? []).map((group) =>
-        group.id === groupId ? { ...group, name: nextName } : group
-      ),
-    }));
+    commitRig({
+      ...rig,
+      groups: (rig.groups ?? []).map((group) => group.id === groupId ? { ...group, name: nextName } : group),
+    }, "Rename folder");
   }
 
   function handleDeleteGroup(groupId: string) {
-    setRig((prev) => ({
-      ...prev,
-      groups: (prev.groups ?? []).filter((group) => group.id !== groupId),
-      parts: prev.parts.map((part) => (part.groupId === groupId ? { ...part, groupId: null } : part)),
-    }));
+    const group = (rig.groups ?? []).find((g) => g.id === groupId);
+    commitRig({
+      ...rig,
+      groups: (rig.groups ?? []).filter((g) => g.id !== groupId),
+      parts: rig.parts.map((part) => (part.groupId === groupId ? { ...part, groupId: null } : part)),
+    }, `Delete folder: ${group?.name ?? "folder"}`);
     if (selectedGroupId === groupId) setSelectedGroupId(null);
   }
 
   function handleToggleGroupLock(groupId: string) {
-    setRig((prev) => ({
-      ...prev,
-      groups: (prev.groups ?? []).map((group) =>
-        group.id === groupId ? { ...group, isLocked: !group.isLocked } : group
-      ),
-    }));
+    const group = (rig.groups ?? []).find((g) => g.id === groupId);
+    commitRig({
+      ...rig,
+      groups: (rig.groups ?? []).map((g) => g.id === groupId ? { ...g, isLocked: !g.isLocked } : g),
+    }, `${group?.isLocked ? "Unlock" : "Lock"} folder`);
   }
 
   function handleToggleGroupExpanded(groupId: string) {
@@ -366,63 +488,54 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   }
 
   function handleToggleGroupVisibility(groupId: string) {
-    setRig((prev) => ({
-      ...prev,
-      groups: (prev.groups ?? []).map((group) =>
-        group.id === groupId ? { ...group, isVisible: group.isVisible === false ? true : false } : group
+    const group = (rig.groups ?? []).find((g) => g.id === groupId);
+    commitRig({
+      ...rig,
+      groups: (rig.groups ?? []).map((g) =>
+        g.id === groupId ? { ...g, isVisible: g.isVisible === false ? true : false } : g
       ),
-    }));
+    }, `${group?.isVisible === false ? "Show" : "Hide"} folder`);
   }
 
   function handlePartGroupChange(partId: string, groupId: string) {
-    setRig((prev) => {
-      const part = prev.parts.find((item) => item.id === partId);
-      if (!part) return prev;
-      const nextGroupId = groupId || null;
-      if (part.groupId === nextGroupId) return prev;
-      if (nextGroupId && !findGroupById(prev.groups, nextGroupId)) return prev;
-      return {
-        ...prev,
-        groups: (prev.groups ?? []).map((group) =>
-          group.id === nextGroupId ? { ...group, isExpanded: true } : group
-        ),
-        parts: prev.parts.map((item) => (item.id === partId ? { ...item, groupId: nextGroupId } : item)),
-      };
-    });
+    const part = rig.parts.find((item) => item.id === partId);
+    if (!part) return;
+    const nextGroupId = groupId || null;
+    if (part.groupId === nextGroupId) return;
+    if (nextGroupId && !findGroupById(rig.groups, nextGroupId)) return;
+    commitRig({
+      ...rig,
+      groups: (rig.groups ?? []).map((group) =>
+        group.id === nextGroupId ? { ...group, isExpanded: true } : group
+      ),
+      parts: rig.parts.map((item) => (item.id === partId ? { ...item, groupId: nextGroupId } : item)),
+    }, nextGroupId ? "Move part to folder" : "Remove part from folder");
   }
 
   function handlePartRename(partId: string, name: string) {
     const nextName = name.trim() || "Untitled part";
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((part) => (part.id === partId ? { ...part, name: nextName } : part)),
-    }));
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((part) => (part.id === partId ? { ...part, name: nextName } : part)),
+    }, `Rename part: ${nextName}`);
   }
 
   function handlePartParentChange(partId: string, parentId: string) {
-    setRig((prev) => {
-      const nextParentId = parentId || null;
-      const part = prev.parts.find((p) => p.id === partId);
-      if (!part) return prev;
-      if (isPartEffectivelyLocked(part, prev.groups)) return prev;
-      if (part.parentId === nextParentId) return prev;
-
-      if (nextParentId === null) {
-        return {
-          ...prev,
-          parts: prev.parts.map((p) => (p.id === partId ? { ...p, parentId: null } : p)),
-        };
-      }
-
-      if (nextParentId === partId) return prev;
-      if (!prev.parts.some((p) => p.id === nextParentId)) return prev;
-      if (wouldCreateParentCycle(prev.parts, partId, nextParentId)) return prev;
-
-      return {
-        ...prev,
-        parts: prev.parts.map((p) => (p.id === partId ? { ...p, parentId: nextParentId } : p)),
-      };
-    });
+    const nextParentId = parentId || null;
+    const part = rig.parts.find((p) => p.id === partId);
+    if (!part) return;
+    if (isPartEffectivelyLocked(part, rig.groups)) return;
+    if (part.parentId === nextParentId) return;
+    if (nextParentId !== null) {
+      if (nextParentId === partId) return;
+      if (!rig.parts.some((p) => p.id === nextParentId)) return;
+      if (wouldCreateParentCycle(rig.parts, partId, nextParentId)) return;
+    }
+    const parentName = nextParentId ? rig.parts.find((p) => p.id === nextParentId)?.name : null;
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) => (p.id === partId ? { ...p, parentId: nextParentId } : p)),
+    }, parentName ? `Set follows: ${parentName}` : "Clear follows");
   }
 
   function handlePolygonPointChange(
@@ -430,57 +543,49 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     pointIndex: number,
     nextPoint: { x: number; y: number }
   ) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || isPartEffectivelyLocked(p, prev.groups)) return p;
-        const updated = p.polygonPoints.map((pt, i) =>
-          i === pointIndex
-            ? { x: Math.round(nextPoint.x), y: Math.round(nextPoint.y) }
-            : pt
-        );
-        const xs = updated.map((pt) => pt.x);
-        const ys = updated.map((pt) => pt.y);
-        const minX = Math.min(...xs);
-        const minY = Math.min(...ys);
-        return {
-          ...p,
-          polygonPoints: updated,
-          bounds: {
-            x: Math.round(minX),
-            y: Math.round(minY),
-            width: Math.round(Math.max(...xs) - minX),
-            height: Math.round(Math.max(...ys) - minY),
-          },
-          // movementPoint preserved intentionally — user placed it manually
-        };
-      }),
-    }));
+    const nextParts = rig.parts.map((p) => {
+      if (p.id !== partId || !p.polygonPoints || isPartEffectivelyLocked(p, rig.groups)) return p;
+      const updated = p.polygonPoints.map((pt, i) =>
+        i === pointIndex ? { x: Math.round(nextPoint.x), y: Math.round(nextPoint.y) } : pt
+      );
+      const xs = updated.map((pt) => pt.x);
+      const ys = updated.map((pt) => pt.y);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      return {
+        ...p,
+        polygonPoints: updated,
+        bounds: {
+          x: Math.round(minX),
+          y: Math.round(minY),
+          width: Math.round(Math.max(...xs) - minX),
+          height: Math.round(Math.max(...ys) - minY),
+        },
+      };
+    });
+    commitRig({ ...rig, parts: nextParts }, "Edit polygon vertex");
   }
 
   function handlePolygonPointDelete(partId: string, pointIndex: number) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length <= 3 || isPartEffectivelyLocked(p, prev.groups)) return p;
-        const updated = p.polygonPoints.filter((_, i) => i !== pointIndex);
-        const xs = updated.map((pt) => pt.x);
-        const ys = updated.map((pt) => pt.y);
-        const minX = Math.min(...xs);
-        const minY = Math.min(...ys);
-        return {
-          ...p,
-          polygonPoints: updated,
-          bounds: {
-            x: Math.round(minX),
-            y: Math.round(minY),
-            width: Math.round(Math.max(...xs) - minX),
-            height: Math.round(Math.max(...ys) - minY),
-          },
-          // movementPoint, rotation, zIndex, name, parentId, imageDataUrl, isVisible preserved
-        };
-      }),
-    }));
+    const nextParts = rig.parts.map((p) => {
+      if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length <= 3 || isPartEffectivelyLocked(p, rig.groups)) return p;
+      const updated = p.polygonPoints.filter((_, i) => i !== pointIndex);
+      const xs = updated.map((pt) => pt.x);
+      const ys = updated.map((pt) => pt.y);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      return {
+        ...p,
+        polygonPoints: updated,
+        bounds: {
+          x: Math.round(minX),
+          y: Math.round(minY),
+          width: Math.round(Math.max(...xs) - minX),
+          height: Math.round(Math.max(...ys) - minY),
+        },
+      };
+    });
+    commitRig({ ...rig, parts: nextParts }, "Delete polygon vertex");
   }
 
   function handlePolygonPointInsert(
@@ -488,69 +593,61 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     afterIndex: number,
     point: { x: number; y: number }
   ) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length < 3 || isPartEffectivelyLocked(p, prev.groups)) return p;
-        const updated = [
-          ...p.polygonPoints.slice(0, afterIndex + 1),
-          { x: Math.round(point.x), y: Math.round(point.y) },
-          ...p.polygonPoints.slice(afterIndex + 1),
-        ];
-        const xs = updated.map((pt) => pt.x);
-        const ys = updated.map((pt) => pt.y);
-        const minX = Math.min(...xs);
-        const minY = Math.min(...ys);
-        return {
-          ...p,
-          polygonPoints: updated,
-          bounds: {
-            x: Math.round(minX),
-            y: Math.round(minY),
-            width: Math.round(Math.max(...xs) - minX),
-            height: Math.round(Math.max(...ys) - minY),
-          },
-        };
-      }),
-    }));
+    const nextParts = rig.parts.map((p) => {
+      if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length < 3 || isPartEffectivelyLocked(p, rig.groups)) return p;
+      const updated = [
+        ...p.polygonPoints.slice(0, afterIndex + 1),
+        { x: Math.round(point.x), y: Math.round(point.y) },
+        ...p.polygonPoints.slice(afterIndex + 1),
+      ];
+      const xs = updated.map((pt) => pt.x);
+      const ys = updated.map((pt) => pt.y);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      return {
+        ...p,
+        polygonPoints: updated,
+        bounds: {
+          x: Math.round(minX),
+          y: Math.round(minY),
+          width: Math.round(Math.max(...xs) - minX),
+          height: Math.round(Math.max(...ys) - minY),
+        },
+      };
+    });
+    commitRig({ ...rig, parts: nextParts }, "Insert polygon vertex");
   }
 
   function handleMovementPointChange(partId: string, point: { x: number; y: number }) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) =>
-        p.id === partId && !isPartEffectivelyLocked(p, prev.groups) ? { ...p, movementPoint: point } : p
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) =>
+        p.id === partId && !isPartEffectivelyLocked(p, rig.groups) ? { ...p, movementPoint: point } : p
       ),
-    }));
+    }, "Move rotation point");
   }
 
   function handleMovePartToFront(partId: string) {
-    setRig((prev) => {
-      const sorted = [...prev.parts].sort((a, b) => a.zIndex - b.zIndex);
-      const idx = sorted.findIndex((p) => p.id === partId);
-      if (idx === -1 || idx === sorted.length - 1) return prev;
-      const part = sorted.splice(idx, 1)[0];
-      sorted.push(part);
-      return { ...prev, parts: sorted.map((p, i) => ({ ...p, zIndex: i })) };
-    });
+    const sorted = [...rig.parts].sort((a, b) => a.zIndex - b.zIndex);
+    const idx = sorted.findIndex((p) => p.id === partId);
+    if (idx === -1 || idx === sorted.length - 1) return;
+    const part = sorted.splice(idx, 1)[0];
+    sorted.push(part);
+    commitRig({ ...rig, parts: sorted.map((p, i) => ({ ...p, zIndex: i })) }, "Move part to front");
   }
 
   function handlePartReorderByDrag(sourcePartId: string, targetPartId: string, placeAfter: boolean) {
-    setRig((prev) => {
-      if (sourcePartId === targetPartId) return prev;
-      const frontSorted = [...prev.parts].sort((a, b) => b.zIndex - a.zIndex);
-      const sourceIndex = frontSorted.findIndex((p) => p.id === sourcePartId);
-      const targetIndex = frontSorted.findIndex((p) => p.id === targetPartId);
-      if (sourceIndex === -1 || targetIndex === -1) return prev;
-
-      const reordered = [...frontSorted];
-      const [moved] = reordered.splice(sourceIndex, 1);
-      const normalizedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-      const insertIndex = placeAfter ? normalizedTargetIndex + 1 : normalizedTargetIndex;
-      reordered.splice(insertIndex, 0, moved);
-
-      return { ...prev, parts: reindexPartsFromFrontOrder(reordered) };
-    });
+    if (sourcePartId === targetPartId) return;
+    const frontSorted = [...rig.parts].sort((a, b) => b.zIndex - a.zIndex);
+    const sourceIndex = frontSorted.findIndex((p) => p.id === sourcePartId);
+    const targetIndex = frontSorted.findIndex((p) => p.id === targetPartId);
+    if (sourceIndex === -1 || targetIndex === -1) return;
+    const reordered = [...frontSorted];
+    const [moved] = reordered.splice(sourceIndex, 1);
+    const normalizedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+    const insertIndex = placeAfter ? normalizedTargetIndex + 1 : normalizedTargetIndex;
+    reordered.splice(insertIndex, 0, moved);
+    commitRig({ ...rig, parts: reindexPartsFromFrontOrder(reordered) }, "Reorder parts");
   }
 
   function handleGroupReorderByDrag(
@@ -559,64 +656,53 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     targetType: "group" | "part",
     placeAfter: boolean
   ) {
-    setRig((prev) => {
-      const blocks = buildLayerBlocks(prev.parts, prev.groups ?? []);
-      const sourceIndex = blocks.findIndex((block) => block.type === "group" && block.id === sourceGroupId);
-      const targetIndex = blocks.findIndex((block) => block.type === targetType && block.id === targetId);
-      if (sourceIndex === -1 || targetIndex === -1) return prev;
-
-      const reorderedBlocks = [...blocks];
-      const [movedBlock] = reorderedBlocks.splice(sourceIndex, 1);
-      const normalizedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-      const insertIndex = placeAfter ? normalizedTargetIndex + 1 : normalizedTargetIndex;
-      reorderedBlocks.splice(insertIndex, 0, movedBlock);
-
-      const partById = new Map(prev.parts.map((part) => [part.id, part]));
-      const reorderedParts = reorderedBlocks
-        .flatMap((block) => block.partIds)
-        .map((partId) => partById.get(partId))
-        .filter((part): part is Part => !!part);
-
-      return { ...prev, parts: reindexPartsFromFrontOrder(reorderedParts) };
-    });
+    const blocks = buildLayerBlocks(rig.parts, rig.groups ?? []);
+    const sourceIndex = blocks.findIndex((block) => block.type === "group" && block.id === sourceGroupId);
+    const targetIndex = blocks.findIndex((block) => block.type === targetType && block.id === targetId);
+    if (sourceIndex === -1 || targetIndex === -1) return;
+    const reorderedBlocks = [...blocks];
+    const [movedBlock] = reorderedBlocks.splice(sourceIndex, 1);
+    const normalizedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+    const insertIndex = placeAfter ? normalizedTargetIndex + 1 : normalizedTargetIndex;
+    reorderedBlocks.splice(insertIndex, 0, movedBlock);
+    const partById = new Map(rig.parts.map((part) => [part.id, part]));
+    const reorderedParts = reorderedBlocks
+      .flatMap((block) => block.partIds)
+      .map((partId) => partById.get(partId))
+      .filter((part): part is Part => !!part);
+    commitRig({ ...rig, parts: reindexPartsFromFrontOrder(reorderedParts) }, "Reorder folders");
   }
 
   function handleMovePartUp(partId: string) {
-    setRig((prev) => {
-      const sorted = [...prev.parts].sort((a, b) => a.zIndex - b.zIndex);
-      const idx = sorted.findIndex((p) => p.id === partId);
-      if (idx === -1 || idx === sorted.length - 1) return prev;
-      [sorted[idx], sorted[idx + 1]] = [sorted[idx + 1], sorted[idx]];
-      return { ...prev, parts: sorted.map((p, i) => ({ ...p, zIndex: i })) };
-    });
+    const sorted = [...rig.parts].sort((a, b) => a.zIndex - b.zIndex);
+    const idx = sorted.findIndex((p) => p.id === partId);
+    if (idx === -1 || idx === sorted.length - 1) return;
+    [sorted[idx], sorted[idx + 1]] = [sorted[idx + 1], sorted[idx]];
+    commitRig({ ...rig, parts: sorted.map((p, i) => ({ ...p, zIndex: i })) }, "Move part up");
   }
 
   function handleMovePartDown(partId: string) {
-    setRig((prev) => {
-      const sorted = [...prev.parts].sort((a, b) => a.zIndex - b.zIndex);
-      const idx = sorted.findIndex((p) => p.id === partId);
-      if (idx <= 0) return prev;
-      [sorted[idx], sorted[idx - 1]] = [sorted[idx - 1], sorted[idx]];
-      return { ...prev, parts: sorted.map((p, i) => ({ ...p, zIndex: i })) };
-    });
+    const sorted = [...rig.parts].sort((a, b) => a.zIndex - b.zIndex);
+    const idx = sorted.findIndex((p) => p.id === partId);
+    if (idx <= 0) return;
+    [sorted[idx], sorted[idx - 1]] = [sorted[idx - 1], sorted[idx]];
+    commitRig({ ...rig, parts: sorted.map((p, i) => ({ ...p, zIndex: i })) }, "Move part down");
   }
 
   function handleMovePartToBack(partId: string) {
-    setRig((prev) => {
-      const sorted = [...prev.parts].sort((a, b) => a.zIndex - b.zIndex);
-      const idx = sorted.findIndex((p) => p.id === partId);
-      if (idx <= 0) return prev;
-      const part = sorted.splice(idx, 1)[0];
-      sorted.unshift(part);
-      return { ...prev, parts: sorted.map((p, i) => ({ ...p, zIndex: i })) };
-    });
+    const sorted = [...rig.parts].sort((a, b) => a.zIndex - b.zIndex);
+    const idx = sorted.findIndex((p) => p.id === partId);
+    if (idx <= 0) return;
+    const part = sorted.splice(idx, 1)[0];
+    sorted.unshift(part);
+    commitRig({ ...rig, parts: sorted.map((p, i) => ({ ...p, zIndex: i })) }, "Move part to back");
   }
 
   function handleResetMovementPoint(partId: string) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) => {
-        if (p.id !== partId || isPartEffectivelyLocked(p, prev.groups)) return p;
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) => {
+        if (p.id !== partId || isPartEffectivelyLocked(p, rig.groups)) return p;
         return {
           ...p,
           movementPoint: {
@@ -625,32 +711,34 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           },
         };
       }),
-    }));
+    }, "Reset rotation point");
   }
 
   function handleRotateLeft(partId: string) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) =>
-        p.id === partId && !isPartEffectivelyLocked(p, prev.groups) ? { ...p, rotation: (p.rotation - 15 + 360) % 360 } : p
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) =>
+        p.id === partId && !isPartEffectivelyLocked(p, rig.groups) ? { ...p, rotation: (p.rotation - 15 + 360) % 360 } : p
       ),
-    }));
+    }, "Rotate left");
   }
 
   function handleRotateRight(partId: string) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) =>
-        p.id === partId && !isPartEffectivelyLocked(p, prev.groups) ? { ...p, rotation: (p.rotation + 15) % 360 } : p
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) =>
+        p.id === partId && !isPartEffectivelyLocked(p, rig.groups) ? { ...p, rotation: (p.rotation + 15) % 360 } : p
       ),
-    }));
+    }, "Rotate right");
   }
 
   function handleResetRotation(partId: string) {
-    setRig((prev) => ({
-      ...prev,
-      parts: prev.parts.map((p) => (p.id === partId && !isPartEffectivelyLocked(p, prev.groups) ? { ...p, rotation: 0 } : p)),
-    }));
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) =>
+        p.id === partId && !isPartEffectivelyLocked(p, rig.groups) ? { ...p, rotation: 0 } : p
+      ),
+    }, "Reset rotation");
   }
 
   function handleMoveGroup(groupId: string, dx: number, dy: number) {
@@ -685,6 +773,10 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
         }),
       };
     });
+  }
+
+  function handleGroupDragEnd() {
+    setPendingHistCommit("Move folder");
   }
 
   const handleZoomIn = useCallback(() => {
@@ -770,6 +862,30 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
                 </span>
               )}
               <button
+                onClick={handleUndo}
+                disabled={hist.index <= 0}
+                title="Undo (Ctrl+Z)"
+                className={`text-sm px-2 py-1.5 rounded transition-colors ${
+                  hist.index <= 0
+                    ? "text-zinc-700 cursor-not-allowed"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                }`}
+              >
+                ↩
+              </button>
+              <button
+                onClick={handleRedo}
+                disabled={hist.index >= hist.entries.length - 1}
+                title="Redo (Ctrl+Shift+Z)"
+                className={`text-sm px-2 py-1.5 rounded transition-colors ${
+                  hist.index >= hist.entries.length - 1
+                    ? "text-zinc-700 cursor-not-allowed"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
+                }`}
+              >
+                ↪
+              </button>
+              <button
                 onClick={handleSave}
                 className="text-zinc-400 hover:text-zinc-200 text-sm px-3 py-1.5 rounded border border-zinc-700 hover:border-zinc-500 transition-colors"
               >
@@ -822,6 +938,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             onPolygonPointChange={handlePolygonPointChange}
             onPolygonPointInsert={handlePolygonPointInsert}
             onPolygonPointDelete={handlePolygonPointDelete}
+            onGroupDragEnd={handleGroupDragEnd}
           />
         </div>
 
@@ -854,6 +971,9 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onRotateLeft={handleRotateLeft}
           onRotateRight={handleRotateRight}
           onResetRotation={handleResetRotation}
+          history={hist.entries}
+          historyIndex={hist.index}
+          onHistoryJump={handleHistoryJump}
         />
       </div>
 

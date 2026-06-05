@@ -2,7 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { findGroupById, isPartDirectlyLocked, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
-import type { LayerGroup, Part } from "@/types/rig";
+import type { CharacterRig, LayerGroup, Part } from "@/types/rig";
+
+interface HistoryEntry {
+  id: string;
+  label: string;
+  rig: CharacterRig;
+  timestamp: number;
+}
 
 interface PartsSidebarProps {
   parts: Part[];
@@ -38,6 +45,9 @@ interface PartsSidebarProps {
   onRotateLeft: (id: string) => void;
   onRotateRight: (id: string) => void;
   onResetRotation: (id: string) => void;
+  history: HistoryEntry[];
+  historyIndex: number;
+  onHistoryJump: (index: number) => void;
 }
 
 function getPartDepth(part: Part, partsById: Map<string, Part>): number {
@@ -105,7 +115,20 @@ export default function PartsSidebar({
   onRotateLeft,
   onRotateRight,
   onResetRotation,
+  history,
+  historyIndex,
+  onHistoryJump,
 }: PartsSidebarProps) {
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const historyListRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!historyExpanded || !historyListRef.current) return;
+    const container = historyListRef.current;
+    const reversedIdx = history.length - 1 - historyIndex;
+    const item = container.children[reversedIdx] as HTMLElement | undefined;
+    item?.scrollIntoView({ block: "nearest" });
+  }, [historyIndex, historyExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
   const [draggingPartId, setDraggingPartId] = useState<string | null>(null);
   const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
   const [dragOverPartId, setDragOverPartId] = useState<string | null>(null);
@@ -774,6 +797,55 @@ export default function PartsSidebar({
           </div>
         </div>
       )}
+
+      {/* History panel */}
+      <div className="border-t border-zinc-800 flex-shrink-0">
+        <button
+          onClick={() => {
+            setHistoryExpanded((v) => !v);
+          }}
+          className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition-colors"
+        >
+          <span>History</span>
+          <span className="text-zinc-600">{historyExpanded ? "▾" : "▸"}</span>
+        </button>
+        {historyExpanded && (
+          <div
+            ref={historyListRef}
+            className="overflow-y-auto border-t border-zinc-800/60"
+            style={{ maxHeight: "160px" }}
+          >
+            {history.length === 0 ? (
+              <p className="px-3 py-2 text-[11px] text-zinc-600">No history yet.</p>
+            ) : (
+              [...history].reverse().map((entry, reversedIdx) => {
+                const idx = history.length - 1 - reversedIdx;
+                const isCurrent = idx === historyIndex;
+                const isFuture = idx > historyIndex;
+                const d = new Date(entry.timestamp);
+                const timeStr = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+                return (
+                  <button
+                    key={entry.id}
+                    onClick={() => onHistoryJump(idx)}
+                    title={timeStr}
+                    className={`w-full text-left px-3 py-1.5 flex items-center gap-2 transition-colors ${
+                      isCurrent
+                        ? "bg-violet-900/50 text-violet-200"
+                        : isFuture
+                        ? "text-zinc-600 hover:bg-zinc-800/60 hover:text-zinc-400"
+                        : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
+                    }`}
+                  >
+                    <span className="flex-1 truncate text-[11px]">{entry.label}</span>
+                    <span className="text-[10px] text-zinc-600 flex-shrink-0 tabular-nums">{timeStr}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="px-3 py-2 border-t border-zinc-800">
         <p className="text-zinc-700 text-xs">
