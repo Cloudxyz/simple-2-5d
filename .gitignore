@@ -32,3 +32,4 @@ yarn.lock
 
 # local dev context — NOT for public repo
 PROJECT_CONTEXT.md
+tsconfig.tsbuildinfo
