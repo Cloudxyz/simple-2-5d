@@ -48,6 +48,10 @@ function reindexPartsFromFrontOrder(parts: Part[]): Part[] {
   }));
 }
 
+function isPartLocked(part: Part | undefined): boolean {
+  return part?.isLocked === true;
+}
+
 export default function EditorLayout({ characterName, freshStart = false }: EditorLayoutProps) {
   const [rig, setRig] = useState<CharacterRig>({
     name: characterName,
@@ -175,7 +179,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   }
 
   function handleDeletePart(id: string) {
-    if (rig.parts.find((p) => p.id === id)?.isLocked) return;
+    if (isPartLocked(rig.parts.find((p) => p.id === id))) return;
     setRig((prev) => ({
       ...prev,
       parts: prev.parts
@@ -204,7 +208,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       const nextParentId = parentId || null;
       const part = prev.parts.find((p) => p.id === partId);
       if (!part) return prev;
-      if (part.isLocked) return prev;
+      if (isPartLocked(part)) return prev;
       if (part.parentId === nextParentId) return prev;
 
       if (nextParentId === null) {
@@ -233,7 +237,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || p.isLocked) return p;
+        if (p.id !== partId || !p.polygonPoints || isPartLocked(p)) return p;
         const updated = p.polygonPoints.map((pt, i) =>
           i === pointIndex
             ? { x: Math.round(nextPoint.x), y: Math.round(nextPoint.y) }
@@ -262,7 +266,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length <= 3 || p.isLocked) return p;
+        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length <= 3 || isPartLocked(p)) return p;
         const updated = p.polygonPoints.filter((_, i) => i !== pointIndex);
         const xs = updated.map((pt) => pt.x);
         const ys = updated.map((pt) => pt.y);
@@ -291,7 +295,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length < 3 || p.isLocked) return p;
+        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length < 3 || isPartLocked(p)) return p;
         const updated = [
           ...p.polygonPoints.slice(0, afterIndex + 1),
           { x: Math.round(point.x), y: Math.round(point.y) },
@@ -319,7 +323,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) =>
-        p.id === partId && !p.isLocked ? { ...p, movementPoint: point } : p
+        p.id === partId && !isPartLocked(p) ? { ...p, movementPoint: point } : p
       ),
     }));
   }
@@ -388,7 +392,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || p.isLocked) return p;
+        if (p.id !== partId || isPartLocked(p)) return p;
         return {
           ...p,
           movementPoint: {
@@ -404,7 +408,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) =>
-        p.id === partId && !p.isLocked ? { ...p, rotation: (p.rotation - 15 + 360) % 360 } : p
+        p.id === partId && !isPartLocked(p) ? { ...p, rotation: (p.rotation - 15 + 360) % 360 } : p
       ),
     }));
   }
@@ -413,7 +417,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) =>
-        p.id === partId && !p.isLocked ? { ...p, rotation: (p.rotation + 15) % 360 } : p
+        p.id === partId && !isPartLocked(p) ? { ...p, rotation: (p.rotation + 15) % 360 } : p
       ),
     }));
   }
@@ -421,7 +425,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   function handleResetRotation(partId: string) {
     setRig((prev) => ({
       ...prev,
-      parts: prev.parts.map((p) => (p.id === partId && !p.isLocked ? { ...p, rotation: 0 } : p)),
+      parts: prev.parts.map((p) => (p.id === partId && !isPartLocked(p) ? { ...p, rotation: 0 } : p)),
     }));
   }
 

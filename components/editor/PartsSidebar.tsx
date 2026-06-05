@@ -22,6 +22,10 @@ interface PartsSidebarProps {
   onResetRotation: (id: string) => void;
 }
 
+function isPartLocked(part: Part | null | undefined): boolean {
+  return part?.isLocked === true;
+}
+
 function getPartDepth(part: Part, partsById: Map<string, Part>): number {
   let depth = 0;
   let currentParentId = part.parentId;
@@ -113,7 +117,7 @@ export default function PartsSidebar({
           <ul className="py-1">
             {sortedParts.map(({ part, parent, depth }) => {
               const isSelected = part.id === selectedPartId;
-              const isLocked = part.isLocked ?? false;
+              const isLocked = isPartLocked(part);
               const isDragging = draggingPartId === part.id;
               const isDragTarget = dragOverPartId === part.id && draggingPartId !== part.id;
               const indentPx = Math.min(depth, 4) * 12;
@@ -252,9 +256,9 @@ export default function PartsSidebar({
               id="part-parent"
               value={selectedPart.parentId ?? ""}
               onChange={(e) => onPartParentChange(selectedPart.id, e.target.value)}
-              disabled={parentOptions.length === 0 || !!selectedPart.isLocked}
+              disabled={parentOptions.length === 0 || isPartLocked(selectedPart)}
               className={`w-full rounded border bg-zinc-950 px-2 py-1 text-xs outline-none transition-colors ${
-                parentOptions.length === 0 || selectedPart.isLocked
+                parentOptions.length === 0 || isPartLocked(selectedPart)
                   ? "cursor-not-allowed border-zinc-800 text-zinc-700"
                   : "border-zinc-800 text-zinc-300 hover:border-zinc-700 focus:border-violet-500"
               }`}
@@ -315,21 +319,21 @@ export default function PartsSidebar({
               <div className="flex gap-1">
                 <OrderButton
                   onClick={() => onRotateLeft(selectedPart.id)}
-                  disabled={!!selectedPart.isLocked}
+                  disabled={isPartLocked(selectedPart)}
                   title="Rotate left"
                 >
                   ↺
                 </OrderButton>
                 <OrderButton
                   onClick={() => onRotateRight(selectedPart.id)}
-                  disabled={!!selectedPart.isLocked}
+                  disabled={isPartLocked(selectedPart)}
                   title="Rotate right"
                 >
                   ↻
                 </OrderButton>
                 <OrderButton
                   onClick={() => onResetRotation(selectedPart.id)}
-                  disabled={selectedPart.rotation === 0 || !!selectedPart.isLocked}
+                  disabled={selectedPart.rotation === 0 || isPartLocked(selectedPart)}
                   title="Reset rotation"
                 >
                   0°
@@ -345,10 +349,10 @@ export default function PartsSidebar({
             </span>
             <button
               onClick={() => onResetMovementPoint(selectedPart.id)}
-              disabled={!!selectedPart.isLocked}
+              disabled={isPartLocked(selectedPart)}
               title="Reset movement point to center"
               className={`text-xs transition-colors whitespace-nowrap ${
-                selectedPart.isLocked
+                isPartLocked(selectedPart)
                   ? "text-zinc-700 cursor-not-allowed"
                   : "text-zinc-500 hover:text-zinc-200"
               }`}
