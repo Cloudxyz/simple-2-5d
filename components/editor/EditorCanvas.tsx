@@ -196,15 +196,25 @@ function isPointInPolygon(point: Point, polygon: Point[]): boolean {
   return inside;
 }
 
-function isPointInPart(point: Point, part: Part, allParts?: Part[]): boolean {
+type DepthOffFn = (part: Part) => { ox: number; oy: number };
+
+function isPointInPart(
+  point: Point,
+  part: Part,
+  allParts?: Part[],
+  depthOffFn?: DepthOffFn
+): boolean {
+  // Subtract the depth offset so the test point is back in the part's unshifted coordinate space
+  const { ox = 0, oy = 0 } = depthOffFn?.(part) ?? { ox: 0, oy: 0 };
+  const testPoint = { x: point.x - ox, y: point.y - oy };
+
   const ancestors = allParts ? getAncestorChain(allParts, part.id) : [];
 
   if (ancestors.length > 0 && ancestors.some((a) => a.rotation !== 0)) {
-    // With active inherited rotation: test against final display polygon
-    return isPointInPolygon(point, getPartDisplayPoints(part, allParts));
+    return isPointInPolygon(testPoint, getPartDisplayPoints(part, allParts));
   }
 
-  const unrotatedPoint = inverseRotatePoint(point, part.movementPoint, part.rotation);
+  const unrotatedPoint = inverseRotatePoint(testPoint, part.movementPoint, part.rotation);
 
   if (part.polygonPoints && part.polygonPoints.length >= 3) {
     return isPointInPolygon(unrotatedPoint, part.polygonPoints);
@@ -219,14 +229,19 @@ function isPointInPart(point: Point, part: Part, allParts?: Part[]): boolean {
   );
 }
 
-function findTopmostVisiblePartAtPoint(parts: Part[], groups: LayerGroup[] | undefined, point: Point): Part | null {
+function findTopmostVisiblePartAtPoint(
+  parts: Part[],
+  groups: LayerGroup[] | undefined,
+  point: Point,
+  depthOffFn?: DepthOffFn
+): Part | null {
   const visibleParts = [...parts]
     .filter((part) => isPartEffectivelyVisible(part, groups))
     .sort((a, b) => b.zIndex - a.zIndex);
 
   for (const part of visibleParts) {
     if (!isPartEffectivelyLocked(part, groups)) {
-      if (isPointInPart(point, part, parts)) return part;
+      if (isPointInPart(point, part, parts, depthOffFn)) return part;
     }
   }
 
@@ -760,7 +775,12 @@ export default function EditorCanvas({
           height: Math.round(Math.min(dy, ih - clampedY)),
         });
       } else {
-        const hitPart = findTopmostVisiblePartAtPoint(rig.parts, rig.groups, dragCurrent);
+        const hitPart = findTopmostVisiblePartAtPoint(
+          rig.parts,
+          rig.groups,
+          dragCurrent,
+          preview2d?.enabled ? depthOff : undefined
+        );
         onSelectPart(hitPart?.id ?? null);
       }
 
