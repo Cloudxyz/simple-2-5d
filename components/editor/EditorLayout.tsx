@@ -143,6 +143,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   });
 
   const [activeTool, setActiveTool] = useState<"select" | "move" | "point" | "pen">("select");
+  const [showStructure, setShowStructure] = useState(false);
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [stageTransform, setStageTransform] = useState<StageTransform>({ x: 0, y: 0, scale: 1 });
@@ -911,6 +912,8 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
         onZoomOut={handleZoomOut}
         onResetView={handleResetView}
         hasImage={!!rig.imageDataUrl}
+        showStructure={showStructure}
+        onToggleStructure={() => setShowStructure((v) => !v)}
       />
 
       {/* Main area */}
@@ -939,6 +942,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             onPolygonPointInsert={handlePolygonPointInsert}
             onPolygonPointDelete={handlePolygonPointDelete}
             onGroupDragEnd={handleGroupDragEnd}
+            showStructure={showStructure}
           />
         </div>
 

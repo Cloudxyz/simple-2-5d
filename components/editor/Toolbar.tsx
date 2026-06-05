@@ -10,6 +10,8 @@ interface ToolbarProps {
   onZoomOut: () => void;
   onResetView: () => void;
   hasImage: boolean;
+  showStructure: boolean;
+  onToggleStructure: () => void;
 }
 
 const tools: { id: Tool; label: string; icon: string; description: string }[] = [
@@ -27,6 +29,8 @@ export default function Toolbar({
   onZoomOut,
   onResetView,
   hasImage,
+  showStructure,
+  onToggleStructure,
 }: ToolbarProps) {
   return (
     <div className="flex items-center justify-between px-3 py-1.5 bg-zinc-900 border-b border-zinc-800 flex-shrink-0">
@@ -48,6 +52,22 @@ export default function Toolbar({
           </button>
         ))}
       </div>
+
+      {/* Structure toggle */}
+      {hasImage && (
+        <button
+          onClick={onToggleStructure}
+          title="Show parent-child connections between parts"
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors ${
+            showStructure
+              ? "bg-violet-900/60 text-violet-300 ring-1 ring-violet-500/50"
+              : "text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
+          }`}
+        >
+          <span className="font-mono text-xs">⬡</span>
+          <span>Structure</span>
+        </button>
+      )}
 
       {/* Zoom controls — only shown once an image is loaded */}
       {hasImage && (

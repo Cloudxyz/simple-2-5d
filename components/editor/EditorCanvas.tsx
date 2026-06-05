@@ -47,6 +47,7 @@ interface EditorCanvasProps {
   onPolygonPointDelete: (partId: string, pointIndex: number) => void;
   onGroupDragBegin?: () => void;
   onGroupDragEnd?: () => void;
+  showStructure?: boolean;
 }
 
 interface HoveredEdge {
@@ -253,6 +254,14 @@ function getAxisAlignedBounds(points: Point[]): BoundingBox | null {
   };
 }
 
+/** World-space position of a part's movementPoint after applying all ancestor rotations. */
+function getDisplayMP(part: Part, allParts: Part[]): Point {
+  const ancestors = getAncestorChain(allParts, part.id);
+  return ancestors.length > 0
+    ? applyAncestorTransform(part.movementPoint, ancestors)
+    : part.movementPoint;
+}
+
 function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
   const [size, setSize] = useState({ width: 800, height: 600 });
   useEffect(() => {
@@ -321,6 +330,7 @@ export default function EditorCanvas({
   onPolygonPointDelete,
   onGroupDragBegin,
   onGroupDragEnd,
+  showStructure = false,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -888,6 +898,60 @@ export default function EditorCanvas({
               listening={false}
             />
           )}
+
+          {/* Structure overlay — parent→child connection lines */}
+          {showStructure && (() => {
+            const visibleIds = new Set(
+              rig.parts.filter((p) => isPartEffectivelyVisible(p, rig.groups)).map((p) => p.id)
+            );
+            const partsById = new Map(rig.parts.map((p) => [p.id, p]));
+            const lines: React.ReactNode[] = [];
+            const dots = new Map<string, { pos: Point; isSelected: boolean }>();
+
+            for (const child of rig.parts) {
+              if (!child.parentId || !visibleIds.has(child.id)) continue;
+              const parent = partsById.get(child.parentId);
+              if (!parent || !visibleIds.has(parent.id)) continue;
+
+              const parentPos = getDisplayMP(parent, rig.parts);
+              const childPos = getDisplayMP(child, rig.parts);
+              const highlighted = child.id === selectedPartId || parent.id === selectedPartId;
+
+              lines.push(
+                <KonvaLine
+                  key={`sl-${child.id}`}
+                  points={[parentPos.x, parentPos.y, childPos.x, childPos.y]}
+                  stroke={highlighted ? "rgba(167,139,250,0.9)" : "rgba(167,139,250,0.35)"}
+                  strokeWidth={1.5 / sc}
+                  strokeScaleEnabled={false}
+                  lineCap="round"
+                  listening={false}
+                />
+              );
+
+              for (const [id, pos] of [[parent.id, parentPos], [child.id, childPos]] as [string, Point][]) {
+                if (!dots.has(id)) {
+                  dots.set(id, { pos, isSelected: id === selectedPartId });
+                }
+              }
+            }
+
+            const dotNodes = [...dots.entries()].map(([id, { pos, isSelected }]) => (
+              <KonvaCircle
+                key={`sd-${id}`}
+                x={pos.x}
+                y={pos.y}
+                radius={3 / sc}
+                fill={isSelected ? "rgba(167,139,250,1)" : "rgba(167,139,250,0.65)"}
+                stroke="rgba(0,0,0,0.45)"
+                strokeWidth={0.8 / sc}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+            ));
+
+            return [...lines, ...dotNodes];
+          })()}
 
           {/* Blue edge highlight + insertion marker when hovering a polygon edge */}
           {hoveredEdge && (
