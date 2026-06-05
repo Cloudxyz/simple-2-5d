@@ -15,6 +15,7 @@ interface Preview2d {
   enabled: boolean;
   viewX: number;
   viewY: number;
+  strength: number;
 }
 
 interface EditorLayoutProps {
@@ -190,7 +191,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     startTime: number;
   } | null>(null);
 
-  const [preview2d, setPreview2d] = useState<Preview2d>({ enabled: false, viewX: 0, viewY: 0 });
+  const [preview2d, setPreview2d] = useState<Preview2d>({ enabled: false, viewX: 0, viewY: 0, strength: 0.25 });
 
   function stopPreview() {
     if (previewRafRef.current !== null) {

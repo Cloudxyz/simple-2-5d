@@ -8,6 +8,7 @@ interface Preview2d {
   enabled: boolean;
   viewX: number;
   viewY: number;
+  strength: number;
 }
 
 interface HistoryEntry {
@@ -192,6 +193,8 @@ export default function PartsSidebar({
   const orbitRafRef = useRef<number | null>(null);
   const onSet2dPreviewRef = useRef(onSet2dPreview);
   useEffect(() => { onSet2dPreviewRef.current = onSet2dPreview; }, [onSet2dPreview]);
+  const preview2dRef = useRef(preview2d);
+  useEffect(() => { preview2dRef.current = preview2d; }, [preview2d]);
 
   function stopOrbit() {
     if (orbitRafRef.current !== null) {
@@ -208,7 +211,7 @@ export default function PartsSidebar({
       const elapsed = ts - start;
       const viewX = Math.sin(elapsed * 0.001);
       const viewY = Math.sin(elapsed * 0.0005) * 0.25;
-      onSet2dPreviewRef.current({ enabled: true, viewX, viewY });
+      onSet2dPreviewRef.current({ enabled: true, viewX, viewY, strength: preview2dRef.current.strength });
       orbitRafRef.current = requestAnimationFrame(tick);
     }
     orbitRafRef.current = requestAnimationFrame(tick);
@@ -1191,6 +1194,21 @@ export default function PartsSidebar({
               />
               <span className="text-[11px] text-zinc-500 tabular-nums w-9 text-right">
                 {preview2d.viewY.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-zinc-600 w-10 flex-shrink-0">Strength</span>
+              <input
+                type="range"
+                min={0.05}
+                max={1.0}
+                step={0.05}
+                value={preview2d.strength}
+                onChange={(e) => onSet2dPreview({ ...preview2d, strength: parseFloat(e.target.value) })}
+                className="flex-1 accent-violet-500"
+              />
+              <span className="text-[11px] text-zinc-500 tabular-nums w-9 text-right">
+                {preview2d.strength.toFixed(2)}x
               </span>
             </div>
             <div className="flex items-center gap-2">

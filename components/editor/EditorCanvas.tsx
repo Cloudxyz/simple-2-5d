@@ -31,6 +31,7 @@ interface Preview2d {
   enabled: boolean;
   viewX: number;
   viewY: number;
+  strength: number;
 }
 
 interface EditorCanvasProps {
@@ -846,9 +847,10 @@ export default function EditorCanvas({
   function depthOff(part: Part): { ox: number; oy: number } {
     if (!preview2d?.enabled) return { ox: 0, oy: 0 };
     const d = part.depth ?? 0;
+    const s = preview2d.strength ?? DEPTH_STRENGTH;
     return {
-      ox: d * preview2d.viewX * DEPTH_STRENGTH,
-      oy: d * preview2d.viewY * DEPTH_STRENGTH,
+      ox: d * preview2d.viewX * s,
+      oy: d * preview2d.viewY * s,
     };
   }
 
