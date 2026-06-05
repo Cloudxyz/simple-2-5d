@@ -7,7 +7,7 @@ import PartsSidebar from "./PartsSidebar";
 import Toolbar from "./Toolbar";
 import NamePartDialog from "./NamePartDialog";
 import { saveProject, loadProject, clearProject } from "@/lib/storage";
-import { findGroupById, isPartEffectivelyLocked } from "@/lib/layers";
+import { findGroupById, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
 import type { BoundingBox, CharacterRig, LayerGroup, Part } from "@/types/rig";
 
 interface EditorLayoutProps {
@@ -270,6 +270,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       name: `Folder ${((rig.groups ?? []).length + 1)}`,
       isLocked: false,
       isExpanded: true,
+      isVisible: true,
     };
     setRig((prev) => ({
       ...prev,
@@ -311,6 +312,15 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       ...prev,
       groups: (prev.groups ?? []).map((group) =>
         group.id === groupId ? { ...group, isExpanded: !group.isExpanded } : group
+      ),
+    }));
+  }
+
+  function handleToggleGroupVisibility(groupId: string) {
+    setRig((prev) => ({
+      ...prev,
+      groups: (prev.groups ?? []).map((group) =>
+        group.id === groupId ? { ...group, isVisible: group.isVisible === false ? true : false } : group
       ),
     }));
   }
@@ -599,14 +609,14 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       const group = findGroupById(prev.groups, groupId);
       if (!group) return prev;
 
-      const groupParts = prev.parts.filter((part) => part.groupId === groupId);
+      const groupParts = prev.parts.filter((part) => part.groupId === groupId && isPartEffectivelyVisible(part, prev.groups));
       if (groupParts.length === 0) return prev;
       if (groupParts.some((part) => isPartEffectivelyLocked(part, prev.groups))) return prev;
 
       return {
         ...prev,
         parts: prev.parts.map((part) => {
-          if (part.groupId !== groupId) return part;
+          if (part.groupId !== groupId || !isPartEffectivelyVisible(part, prev.groups)) return part;
           return {
             ...part,
             bounds: {
@@ -772,6 +782,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onRenameGroup={handleRenameGroup}
           onDeleteGroup={handleDeleteGroup}
           onToggleGroupLock={handleToggleGroupLock}
+          onToggleGroupVisibility={handleToggleGroupVisibility}
           onToggleGroupExpanded={handleToggleGroupExpanded}
           onPartGroupChange={handlePartGroupChange}
           onPartRename={handlePartRename}

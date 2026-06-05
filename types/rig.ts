@@ -37,6 +37,7 @@ export interface LayerGroup {
   name: string;
   isLocked: boolean;
   isExpanded: boolean;
+  isVisible?: boolean;
 }
 
 export interface CharacterRig {

@@ -4,7 +4,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { Stage, Layer, Image as KonvaImage, Rect as KonvaRect, Circle as KonvaCircle, Line as KonvaLine } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as StageType } from "konva/lib/Stage";
-import { findGroupById, isPartEffectivelyLocked } from "@/lib/layers";
+import { findGroupById, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
 import type { BoundingBox, CharacterRig, LayerGroup, Part, Point } from "@/types/rig";
 
 const MIN_ZOOM = 0.05;
@@ -138,7 +138,7 @@ function isPointInPart(point: Point, part: Part): boolean {
 
 function findTopmostVisiblePartAtPoint(parts: Part[], groups: LayerGroup[] | undefined, point: Point): Part | null {
   const visibleParts = [...parts]
-    .filter((part) => part.isVisible)
+    .filter((part) => isPartEffectivelyVisible(part, groups))
     .sort((a, b) => b.zIndex - a.zIndex);
 
   for (const part of visibleParts) {
@@ -382,7 +382,7 @@ export default function EditorCanvas({
   const selectedGroupParts = selectedGroupId
     ? rig.parts.filter((part) => part.groupId === selectedGroupId)
     : [];
-  const selectedGroupVisibleParts = selectedGroupParts.filter((part) => part.isVisible);
+  const selectedGroupVisibleParts = selectedGroupParts.filter((part) => isPartEffectivelyVisible(part, rig.groups));
   const selectedGroupOutline = getAxisAlignedBounds(
     selectedGroupVisibleParts.flatMap((part) => getPartDisplayPoints(part))
   );
@@ -518,7 +518,7 @@ export default function EditorCanvas({
     // Edge hover for polygon point insertion — pen tool only, not while drawing a new polygon
     if (activeTool === "pen" && !liveVertex && penPoints.length === 0) {
       const selPart = selectedPartId
-        ? rig.parts.find((p) => p.id === selectedPartId && p.isVisible)
+        ? rig.parts.find((p) => p.id === selectedPartId && isPartEffectivelyVisible(p, rig.groups))
         : null;
       if (isPartEffectivelyLocked(selPart, rig.groups)) {
         if (hoveredEdge) setHoveredEdge(null);
@@ -656,7 +656,7 @@ export default function EditorCanvas({
 
   // The part whose pivot we show — must be selected and visible
   const selectedPart = rig.parts.find(
-    (p) => p.id === selectedPartId && p.isVisible
+    (p) => p.id === selectedPartId && isPartEffectivelyVisible(p, rig.groups)
   ) ?? null;
 
   // Scale-compensated sizes so the pivot indicator stays constant in screen pixels
@@ -705,7 +705,7 @@ export default function EditorCanvas({
                Polygon parts use KonvaLine (closed); rectangle parts use KonvaRect.
                Both use the same x/offsetX rotation trick to pivot around movementPoint. */}
           {[...rig.parts].sort((a, b) => a.zIndex - b.zIndex).map((part) => {
-            if (!part.isVisible) return null;
+            if (!isPartEffectivelyVisible(part, rig.groups)) return null;
             const sel = part.id === selectedPartId;
             const mp = part.movementPoint;
             const stroke = sel ? "rgba(167,139,250,1)" : "rgba(139,92,246,0.7)";
@@ -820,7 +820,7 @@ export default function EditorCanvas({
           {/* Draggable vertex markers for the selected polygon part */}
           {(() => {
             if (!selectedPartId) return null;
-            const part = rig.parts.find((p) => p.id === selectedPartId && p.isVisible);
+            const part = rig.parts.find((p) => p.id === selectedPartId && isPartEffectivelyVisible(p, rig.groups));
             if (!part?.polygonPoints || part.polygonPoints.length < 3 || isPartEffectivelyLocked(part, rig.groups)) return null;
             const mp = part.movementPoint;
             const rad = (part.rotation * Math.PI) / 180;

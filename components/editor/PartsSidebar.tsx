@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { findGroupById, isPartDirectlyLocked, isPartEffectivelyLocked } from "@/lib/layers";
+import { findGroupById, isPartDirectlyLocked, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
 import type { LayerGroup, Part } from "@/types/rig";
 
 interface PartsSidebarProps {
@@ -15,6 +15,7 @@ interface PartsSidebarProps {
   onRenameGroup: (groupId: string, name: string) => void;
   onDeleteGroup: (groupId: string) => void;
   onToggleGroupLock: (groupId: string) => void;
+  onToggleGroupVisibility: (groupId: string) => void;
   onToggleGroupExpanded: (groupId: string) => void;
   onPartGroupChange: (partId: string, groupId: string) => void;
   onPartRename: (partId: string, name: string) => void;
@@ -86,6 +87,7 @@ export default function PartsSidebar({
   onRenameGroup,
   onDeleteGroup,
   onToggleGroupLock,
+  onToggleGroupVisibility,
   onToggleGroupExpanded,
   onPartGroupChange,
   onPartRename,
@@ -235,6 +237,7 @@ export default function PartsSidebar({
     const isSelected = part.id === selectedPartId;
     const isDirectlyLocked = isPartDirectlyLocked(part);
     const isEffectivelyLocked = isPartEffectivelyLocked(part, groups);
+    const isEffectivelyVisible = isPartEffectivelyVisible(part, groups);
     const isDragging = draggingPartId === part.id;
     const isDragTarget =
       dragOverPartId === part.id && draggingPartId !== part.id && draggingGroupId === null;
@@ -318,7 +321,7 @@ export default function PartsSidebar({
                 onDoubleClick={() => startPartRename(part)}
                 aria-current={isSelected ? "true" : undefined}
                 className={`w-full text-left transition-colors ${
-                  !part.isVisible ? "opacity-40" : ""
+                  !isEffectivelyVisible ? "opacity-40" : ""
                 }`}
                 title={part.name}
               >
@@ -536,6 +539,22 @@ export default function PartsSidebar({
                         ✎
                       </button>
                     )}
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleGroupVisibility(group.id);
+                      }}
+                      title={group.isVisible === false ? "Show folder" : "Hide folder"}
+                      className={`flex-shrink-0 p-1 rounded transition-colors ${
+                        group.isVisible === false
+                          ? "text-zinc-700 hover:text-zinc-400"
+                          : "text-zinc-500 hover:text-zinc-200"
+                      }`}
+                    >
+                      {group.isVisible === false ? <EyeClosedIcon /> : <EyeOpenIcon />}
+                    </button>
 
                     <button
                       type="button"

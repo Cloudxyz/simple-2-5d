@@ -43,6 +43,7 @@ export function loadProject(): CharacterRig | null {
       ...group,
       isLocked: group.isLocked ?? false,
       isExpanded: group.isExpanded ?? true,
+      isVisible: group.isVisible ?? true,
     }));
     rig.parts = rig.parts.map((p) => ({
       ...p,

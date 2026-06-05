@@ -5,6 +5,11 @@ export function findGroupById(groups: LayerGroup[] | undefined, groupId: string 
   return groups.find((group) => group.id === groupId) ?? null;
 }
 
+export function isPartEffectivelyVisible(part: Part | null | undefined, groups: LayerGroup[] | undefined): boolean {
+  if (!part || part.isVisible !== true) return false;
+  return findGroupById(groups, part.groupId)?.isVisible !== false;
+}
+
 export function isPartDirectlyLocked(part: Part | null | undefined): boolean {
   return part?.isLocked === true;
 }
