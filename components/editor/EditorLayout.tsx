@@ -197,6 +197,31 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     }));
   }
 
+  function handlePolygonPointDelete(partId: string, pointIndex: number) {
+    setRig((prev) => ({
+      ...prev,
+      parts: prev.parts.map((p) => {
+        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length <= 3) return p;
+        const updated = p.polygonPoints.filter((_, i) => i !== pointIndex);
+        const xs = updated.map((pt) => pt.x);
+        const ys = updated.map((pt) => pt.y);
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
+        return {
+          ...p,
+          polygonPoints: updated,
+          bounds: {
+            x: Math.round(minX),
+            y: Math.round(minY),
+            width: Math.round(Math.max(...xs) - minX),
+            height: Math.round(Math.max(...ys) - minY),
+          },
+          // movementPoint, rotation, zIndex, name, parentId, imageDataUrl, isVisible preserved
+        };
+      }),
+    }));
+  }
+
   function handlePolygonPointInsert(
     partId: string,
     afterIndex: number,
@@ -446,6 +471,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             onPenCancel={handlePenCancel}
             onPolygonPointChange={handlePolygonPointChange}
             onPolygonPointInsert={handlePolygonPointInsert}
+            onPolygonPointDelete={handlePolygonPointDelete}
           />
         </div>
 

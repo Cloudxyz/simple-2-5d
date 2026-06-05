@@ -40,6 +40,7 @@ interface EditorCanvasProps {
   onPenCancel: () => void;
   onPolygonPointChange: (partId: string, pointIndex: number, nextPoint: Point) => void;
   onPolygonPointInsert: (partId: string, afterIndex: number, point: Point) => void;
+  onPolygonPointDelete: (partId: string, pointIndex: number) => void;
 }
 
 interface HoveredEdge {
@@ -126,6 +127,7 @@ export default function EditorCanvas({
   onPenCancel,
   onPolygonPointChange,
   onPolygonPointInsert,
+  onPolygonPointDelete,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -142,11 +144,12 @@ export default function EditorCanvas({
   const [liveVertex, setLiveVertex] = useState<LiveVertex | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<HoveredEdge | null>(null);
   const [vertexHovered, setVertexHovered] = useState(false);
+  const [selectedPolygonPointIdx, setSelectedPolygonPointIdx] = useState<number | null>(null);
 
   // Clear transient interaction state when the selected part changes
-  useEffect(() => { setLiveVertex(null); setHoveredEdge(null); }, [selectedPartId]);
-  // Clear vertex cursor override when switching tools
-  useEffect(() => { setVertexHovered(false); setHoveredEdge(null); }, [activeTool]);
+  useEffect(() => { setLiveVertex(null); setHoveredEdge(null); setSelectedPolygonPointIdx(null); }, [selectedPartId]);
+  // Clear vertex cursor override and selection when switching tools
+  useEffect(() => { setVertexHovered(false); setHoveredEdge(null); setSelectedPolygonPointIdx(null); }, [activeTool]);
 
   useEffect(() => {
     if (!rig.imageDataUrl) { setKonvaImage(null); return; }
@@ -201,14 +204,25 @@ export default function EditorCanvas({
           e.preventDefault();
           onPenComplete(penPoints);
         }
-      } else if (e.key === "Backspace") {
-        e.preventDefault();
-        onPenRemoveLastPoint();
+      } else if (e.key === "Backspace" || e.key === "Delete") {
+        if (penPoints.length > 0) {
+          // In-progress drawing: Backspace removes the last placed point
+          if (e.key === "Backspace") {
+            e.preventDefault();
+            onPenRemoveLastPoint();
+          }
+        } else if (selectedPolygonPointIdx !== null && selectedPartId) {
+          // Existing polygon vertex selected: delete it
+          e.preventDefault();
+          onPolygonPointDelete(selectedPartId, selectedPolygonPointIdx);
+          setSelectedPolygonPointIdx(null);
+        }
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeTool, penClosed, penPoints, onPenComplete, onPenCancel, onPenRemoveLastPoint]);
+  }, [activeTool, penClosed, penPoints, selectedPolygonPointIdx, selectedPartId,
+      onPenComplete, onPenCancel, onPenRemoveLastPoint, onPolygonPointDelete]);
 
   function loadFile(file: File) {
     if (!file.type.startsWith("image/")) return;
@@ -627,15 +641,16 @@ export default function EditorCanvas({
                   const isLive = liveVertex?.partId === part.id && liveVertex.idx === i;
                   const cx = isLive ? liveVertex!.stagePos.x : defaultX;
                   const cy = isLive ? liveVertex!.stagePos.y : defaultY;
+                  const isSelected = activeTool === "pen" && selectedPolygonPointIdx === i;
                   return (
                     <KonvaCircle
                       key={`vtx-${part.id}-${i}`}
                       x={cx}
                       y={cy}
-                      radius={4 / sc}
-                      fill="rgba(167,139,250,0.95)"
-                      stroke="rgba(255,255,255,0.5)"
-                      strokeWidth={1}
+                      radius={isSelected ? 6 / sc : 4 / sc}
+                      fill={isSelected ? "rgba(255,255,255,1)" : "rgba(167,139,250,0.95)"}
+                      stroke={isSelected ? "rgba(167,139,250,1)" : "rgba(255,255,255,0.5)"}
+                      strokeWidth={isSelected ? 2 : 1}
                       strokeScaleEnabled={false}
                       draggable={activeTool === "pen"}
                       onMouseEnter={() => { if (activeTool === "pen") setVertexHovered(true); }}
@@ -644,6 +659,12 @@ export default function EditorCanvas({
                         // Only block bubbling in pen mode so select-tool clicks
                         // still propagate to the polygon shape and select it
                         if (activeTool === "pen") e.cancelBubble = true;
+                      }}
+                      onClick={(e: KonvaEventObject<MouseEvent>) => {
+                        if (activeTool !== "pen") return;
+                        e.cancelBubble = true;
+                        // Toggle: clicking the already-selected vertex deselects it
+                        setSelectedPolygonPointIdx(selectedPolygonPointIdx === i ? null : i);
                       }}
                       onDragMove={(e) => {
                         if (activeTool !== "pen") return;
