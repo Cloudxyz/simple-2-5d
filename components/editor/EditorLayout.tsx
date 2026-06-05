@@ -8,7 +8,7 @@ import Toolbar from "./Toolbar";
 import NamePartDialog from "./NamePartDialog";
 import { saveProject, loadProject, clearProject } from "@/lib/storage";
 import { findGroupById, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
-import type { BoundingBox, CharacterRig, LayerGroup, Part, SavedPose } from "@/types/rig";
+import type { BoundingBox, CharacterRig, LayerGroup, Part, SavedPose, TimelineStep } from "@/types/rig";
 
 interface EditorLayoutProps {
   characterName: string;
@@ -167,11 +167,18 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
   // Animation preview — transient, never saved or committed to history
   const [previewRotations, setPreviewRotations] = useState<Record<string, number> | null>(null);
+  const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
   const previewRafRef = useRef<number | null>(null);
   const previewConfigRef = useRef<{
     fromRotations: Record<string, number>;
     toRotations: Record<string, number>;
     duration: number;
+    loop: boolean;
+    startTime: number;
+  } | null>(null);
+  const timelineConfigRef = useRef<{
+    stepRotations: Record<string, number>[];
+    durations: number[];
     loop: boolean;
     startTime: number;
   } | null>(null);
@@ -182,7 +189,9 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       previewRafRef.current = null;
     }
     previewConfigRef.current = null;
+    timelineConfigRef.current = null;
     setPreviewRotations(null);
+    setIsTimelinePlaying(false);
   }
 
   function commitRig(nextRig: CharacterRig, label: string) {
@@ -807,7 +816,14 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   function handleDeletePose(poseId: string) {
     const poses = rig.poses ?? [];
     if (!poses.some((p) => p.id === poseId)) return;
-    commitRig({ ...rig, poses: poses.filter((p) => p.id !== poseId) }, "Deleted pose");
+    commitRig(
+      {
+        ...rig,
+        poses: poses.filter((p) => p.id !== poseId),
+        timeline: (rig.timeline ?? []).filter((s) => s.poseId !== poseId),
+      },
+      "Deleted pose"
+    );
   }
 
   function handleStartPreview(
@@ -869,6 +885,114 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
   function handleStopPreview() {
     stopPreview();
+  }
+
+  function handleAddTimelineStep(poseId: string) {
+    const poses = rig.poses ?? [];
+    if (!poses.some((p) => p.id === poseId)) return;
+    const step: TimelineStep = { id: crypto.randomUUID(), poseId, duration: 1 };
+    commitRig({ ...rig, timeline: [...(rig.timeline ?? []), step] }, "Added timeline step");
+  }
+
+  function handleRemoveTimelineStep(stepId: string) {
+    const timeline = rig.timeline ?? [];
+    if (!timeline.some((s) => s.id === stepId)) return;
+    commitRig(
+      { ...rig, timeline: timeline.filter((s) => s.id !== stepId) },
+      "Removed timeline step"
+    );
+  }
+
+  function handleReorderTimelineStep(stepId: string, direction: "up" | "down") {
+    const timeline = [...(rig.timeline ?? [])];
+    const idx = timeline.findIndex((s) => s.id === stepId);
+    if (idx < 0) return;
+    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= timeline.length) return;
+    [timeline[idx], timeline[swapIdx]] = [timeline[swapIdx], timeline[idx]];
+    commitRig({ ...rig, timeline }, "Reordered timeline");
+  }
+
+  function handleChangeTimelineStepDuration(stepId: string, duration: number) {
+    const timeline = rig.timeline ?? [];
+    if (!timeline.some((s) => s.id === stepId)) return;
+    commitRig(
+      {
+        ...rig,
+        timeline: timeline.map((s) =>
+          s.id === stepId ? { ...s, duration: Math.max(0.1, duration) } : s
+        ),
+      },
+      "Changed timeline duration"
+    );
+  }
+
+  function handlePlayTimeline(loop: boolean) {
+    const poses = rig.poses ?? [];
+    const timeline = rig.timeline ?? [];
+    if (timeline.length < 2) return;
+
+    const stepRotations = timeline.map((step) => {
+      const pose = poses.find((p) => p.id === step.poseId);
+      return pose ? { ...pose.rotations } : {};
+    });
+    const durations = timeline.map((s) => Math.max(0.1, s.duration));
+
+    if (previewRafRef.current !== null) cancelAnimationFrame(previewRafRef.current);
+    previewConfigRef.current = null;
+
+    timelineConfigRef.current = { stepRotations, durations, loop, startTime: performance.now() };
+    setIsTimelinePlaying(true);
+
+    function timelineTick(now: number) {
+      const cfg = timelineConfigRef.current;
+      if (!cfg) return;
+
+      const N = cfg.stepRotations.length;
+      const segCount = cfg.loop ? N : N - 1;
+      const totalDur = cfg.durations.slice(0, segCount).reduce((a, b) => a + b, 0);
+      if (totalDur <= 0) return;
+
+      const elapsed = (now - cfg.startTime) / 1000;
+
+      if (!cfg.loop && elapsed >= totalDur) {
+        setPreviewRotations({ ...cfg.stepRotations[N - 1] });
+        previewRafRef.current = null;
+        return;
+      }
+
+      const t = cfg.loop ? elapsed % totalDur : Math.min(elapsed, totalDur);
+
+      let segStart = 0;
+      let fromIdx = 0;
+      let localT = 0;
+      for (let i = 0; i < segCount; i++) {
+        const segEnd = segStart + cfg.durations[i];
+        if (t < segEnd || i === segCount - 1) {
+          fromIdx = i;
+          const segDur = cfg.durations[i];
+          localT = segDur > 0 ? Math.min((t - segStart) / segDur, 1) : 1;
+          break;
+        }
+        segStart = segEnd;
+      }
+
+      const toIdx = (fromIdx + 1) % N;
+      const from = cfg.stepRotations[fromIdx];
+      const to = cfg.stepRotations[toIdx];
+
+      const next: Record<string, number> = {};
+      for (const id of Object.keys(from)) {
+        next[id] = to[id] !== undefined ? from[id] + (to[id] - from[id]) * localT : from[id];
+      }
+      setPreviewRotations(next);
+
+      if (timelineConfigRef.current !== null) {
+        previewRafRef.current = requestAnimationFrame(timelineTick);
+      }
+    }
+
+    previewRafRef.current = requestAnimationFrame(timelineTick);
   }
 
   function handleRotateLeft(partId: string) {
@@ -1151,13 +1275,21 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onRotateRight={handleRotateRight}
           onResetRotation={handleResetRotation}
           poses={rig.poses ?? []}
-          isPreviewPlaying={previewRafRef.current !== null || previewRotations !== null}
+          isPreviewPlaying={!isTimelinePlaying && (previewRafRef.current !== null || previewRotations !== null)}
           onStartPreview={handleStartPreview}
           onStopPreview={handleStopPreview}
           onSavePose={handleSavePose}
           onApplyPose={handleApplyPose}
           onRenamePose={handleRenamePose}
           onDeletePose={handleDeletePose}
+          timeline={rig.timeline ?? []}
+          isTimelinePlaying={isTimelinePlaying}
+          onPlayTimeline={handlePlayTimeline}
+          onStopTimeline={handleStopPreview}
+          onAddTimelineStep={handleAddTimelineStep}
+          onRemoveTimelineStep={handleRemoveTimelineStep}
+          onReorderTimelineStep={handleReorderTimelineStep}
+          onChangeTimelineStepDuration={handleChangeTimelineStepDuration}
           history={hist.entries}
           historyIndex={hist.index}
           onHistoryJump={handleHistoryJump}

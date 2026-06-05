@@ -54,6 +54,7 @@ export function loadProject(): CharacterRig | null {
       polygonPoints: (p as { polygonPoints?: import("@/types/rig").Point[] | null }).polygonPoints ?? null,
     }));
     rig.poses = rig.poses ?? [];
+    rig.timeline = rig.timeline ?? [];
     return rig;
   } catch {
     return null;

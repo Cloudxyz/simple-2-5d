@@ -48,12 +48,21 @@ export interface SavedPose {
   createdAt: number;
 }
 
+export interface TimelineStep {
+  id: string;
+  /** References a SavedPose by id */
+  poseId: string;
+  /** Transition duration in seconds from this step to the next */
+  duration: number;
+}
+
 export interface CharacterRig {
   name: string;
   imageDataUrl: string | null;
   parts: Part[];
   groups?: LayerGroup[];
   poses?: SavedPose[];
+  timeline?: TimelineStep[];
 }
 
 export interface RigExport {
