@@ -4,7 +4,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { Stage, Layer, Image as KonvaImage, Rect as KonvaRect, Circle as KonvaCircle, Line as KonvaLine } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as StageType } from "konva/lib/Stage";
-import { isPartEffectivelyLocked } from "@/lib/layers";
+import { findGroupById, isPartEffectivelyLocked } from "@/lib/layers";
 import type { BoundingBox, CharacterRig, LayerGroup, Part, Point } from "@/types/rig";
 
 const MIN_ZOOM = 0.05;
@@ -26,10 +26,12 @@ interface EditorCanvasProps {
   rig: CharacterRig;
   activeTool: "select" | "move" | "point" | "pen";
   selectedPartId: string | null;
+  selectedGroupId: string | null;
   onImageUpload: (dataUrl: string) => void;
   onSelectionComplete: (bounds: BoundingBox) => void;
   onSelectPart: (id: string | null) => void;
   onMovementPointChange: (partId: string, point: Point) => void;
+  onMoveGroup: (groupId: string, dx: number, dy: number) => void;
   stageTransform: StageTransform;
   onStageTransformChange: (t: StageTransform) => void;
   resetKey: number;
@@ -74,6 +76,18 @@ function inverseRotatePoint(point: Point, pivot: Point, rotation: number): Point
   return {
     x: cos * dx + sin * dy + pivot.x,
     y: -sin * dx + cos * dy + pivot.y,
+  };
+}
+
+function rotatePoint(point: Point, pivot: Point, rotation: number): Point {
+  const rad = (rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = point.x - pivot.x;
+  const dy = point.y - pivot.y;
+  return {
+    x: cos * dx - sin * dy + pivot.x,
+    y: sin * dx + cos * dy + pivot.y,
   };
 }
 
@@ -136,6 +150,36 @@ function findTopmostVisiblePartAtPoint(parts: Part[], groups: LayerGroup[] | und
   return null;
 }
 
+function getPartDisplayPoints(part: Part): Point[] {
+  if (part.polygonPoints && part.polygonPoints.length >= 3) {
+    return part.polygonPoints.map((point) => rotatePoint(point, part.movementPoint, part.rotation));
+  }
+
+  const { bounds } = part;
+  return [
+    { x: bounds.x, y: bounds.y },
+    { x: bounds.x + bounds.width, y: bounds.y },
+    { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+    { x: bounds.x, y: bounds.y + bounds.height },
+  ].map((point) => rotatePoint(point, part.movementPoint, part.rotation));
+}
+
+function getAxisAlignedBounds(points: Point[]): BoundingBox | null {
+  if (points.length === 0) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
 function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
   const [size, setSize] = useState({ width: 800, height: 600 });
   useEffect(() => {
@@ -184,10 +228,12 @@ export default function EditorCanvas({
   rig,
   activeTool,
   selectedPartId,
+  selectedGroupId,
   onImageUpload,
   onSelectionComplete,
   onSelectPart,
   onMovementPointChange,
+  onMoveGroup,
   stageTransform,
   onStageTransformChange,
   resetKey,
@@ -211,6 +257,7 @@ export default function EditorCanvas({
 
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [dragCurrent, setDragCurrent] = useState<Point | null>(null);
+  const [groupDragPointer, setGroupDragPointer] = useState<Point | null>(null);
   const [penMousePos, setPenMousePos] = useState<Point | null>(null);
   const [dashOffset, setDashOffset] = useState(0);
   const [liveVertex, setLiveVertex] = useState<LiveVertex | null>(null);
@@ -220,6 +267,9 @@ export default function EditorCanvas({
 
   // Clear transient interaction state when the selected part changes
   useEffect(() => { setLiveVertex(null); setHoveredEdge(null); setSelectedPolygonPointIdx(null); }, [selectedPartId]);
+  useEffect(() => {
+    setGroupDragPointer(null);
+  }, [selectedGroupId]);
   // Clear vertex cursor override and selection when switching tools
   useEffect(() => { setVertexHovered(false); setHoveredEdge(null); setSelectedPolygonPointIdx(null); }, [activeTool]);
   useEffect(() => {
@@ -326,6 +376,35 @@ export default function EditorCanvas({
     };
   }
 
+  const selectedGroup = selectedGroupId
+    ? findGroupById(rig.groups, selectedGroupId)
+    : null;
+  const selectedGroupParts = selectedGroupId
+    ? rig.parts.filter((part) => part.groupId === selectedGroupId)
+    : [];
+  const selectedGroupVisibleParts = selectedGroupParts.filter((part) => part.isVisible);
+  const selectedGroupOutline = getAxisAlignedBounds(
+    selectedGroupVisibleParts.flatMap((part) => getPartDisplayPoints(part))
+  );
+  const selectedGroupCanMove =
+    !!selectedGroup &&
+    selectedGroupParts.length > 0 &&
+    selectedGroupParts.every((part) => !isPartEffectivelyLocked(part, rig.groups));
+
+  function shouldStartGroupDrag(point: Point): boolean {
+    if (activeTool !== "select" || !selectedGroupId || !selectedGroupCanMove) return false;
+    if (selectedGroupOutline) {
+      const withinOutline =
+        point.x >= selectedGroupOutline.x &&
+        point.x <= selectedGroupOutline.x + selectedGroupOutline.width &&
+        point.y >= selectedGroupOutline.y &&
+        point.y <= selectedGroupOutline.y + selectedGroupOutline.height;
+      if (withinOutline) return true;
+    }
+
+    return selectedGroupVisibleParts.some((part) => isPointInPart(point, part));
+  }
+
   function handleWheel(e: KonvaEventObject<WheelEvent>) {
     e.evt.preventDefault();
     const stage = stageRef.current;
@@ -363,6 +442,10 @@ export default function EditorCanvas({
       const pos = stage.getPointerPosition();
       if (!pos) return;
       const imgPos = toImageCoords(pos.x, pos.y);
+      if (shouldStartGroupDrag(imgPos)) {
+        setGroupDragPointer(imgPos);
+        return;
+      }
       setDragStart(imgPos);
       setDragCurrent(imgPos);
     }
@@ -409,6 +492,22 @@ export default function EditorCanvas({
       const pos = stage.getPointerPosition();
       if (!pos) return;
       setDragCurrent(toImageCoords(pos.x, pos.y));
+      return;
+    }
+
+    if (groupDragPointer) {
+      const stage = stageRef.current;
+      if (!stage || !selectedGroupId) return;
+      const pos = stage.getPointerPosition();
+      if (!pos) return;
+      const imgPos = toImageCoords(pos.x, pos.y);
+      const dx = imgPos.x - groupDragPointer.x;
+      const dy = imgPos.y - groupDragPointer.y;
+      if (dx !== 0 || dy !== 0) {
+        onMoveGroup(selectedGroupId, dx, dy);
+        setGroupDragPointer(imgPos);
+      }
+      return;
     }
 
     if (activeTool === "pen" && !penClosed) {
@@ -521,6 +620,11 @@ export default function EditorCanvas({
 
       setDragStart(null);
       setDragCurrent(null);
+      return;
+    }
+
+    if (groupDragPointer) {
+      setGroupDragPointer(null);
     }
   }
 
@@ -529,6 +633,7 @@ export default function EditorCanvas({
     lastPointer.current = null;
     setDragStart(null);
     setDragCurrent(null);
+    setGroupDragPointer(null);
     setPenMousePos(null);
     setHoveredEdge(null);
   }
@@ -541,6 +646,7 @@ export default function EditorCanvas({
   } : null;
 
   const cursor = isPanning ? "grabbing"
+    : groupDragPointer ? "grabbing"
     : (activeTool === "pen" && vertexHovered) ? "grab"
     : hoveredEdge ? "copy"
     : activeTool === "move" ? "grab"
@@ -665,6 +771,21 @@ export default function EditorCanvas({
               strokeScaleEnabled={false}
               fill="rgba(139,92,246,0.05)"
               dash={[4, 4]}
+              listening={false}
+            />
+          )}
+
+          {selectedGroup && selectedGroupOutline && (
+            <KonvaRect
+              x={selectedGroupOutline.x}
+              y={selectedGroupOutline.y}
+              width={selectedGroupOutline.width}
+              height={selectedGroupOutline.height}
+              stroke="rgba(56,189,248,0.95)"
+              strokeWidth={2}
+              strokeScaleEnabled={false}
+              dash={[8, 5]}
+              fill="rgba(56,189,248,0.06)"
               listening={false}
             />
           )}

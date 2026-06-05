@@ -86,6 +86,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
   const [activeTool, setActiveTool] = useState<"select" | "move" | "point" | "pen">("select");
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [stageTransform, setStageTransform] = useState<StageTransform>({ x: 0, y: 0, scale: 1 });
   const [resetKey, setResetKey] = useState(0);
   const [pendingBounds, setPendingBounds] = useState<BoundingBox | null>(null);
@@ -159,6 +160,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     clearProject();
     setRig({ name: characterName, parts: [], imageDataUrl: null, groups: [] });
     setSelectedPartId(null);
+    setSelectedGroupId(null);
     setStageTransform({ x: 0, y: 0, scale: 1 });
     setShowClearConfirm(false);
     setSaveStatus("idle");
@@ -189,6 +191,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     };
     setRig((prev) => ({ ...prev, parts: [...prev.parts, newPart] }));
     setSelectedPartId(newPart.id);
+    setSelectedGroupId(null);
     setPendingBounds(null);
     setPenPoints([]);
     setPenClosed(false);
@@ -203,6 +206,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   function handleSelectPart(id: string | null) {
     if (!id) {
       setSelectedPartId(null);
+      setSelectedGroupId(null);
       return;
     }
     const selectedPart = rig.parts.find((part) => part.id === id);
@@ -215,6 +219,24 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       }));
     }
     setSelectedPartId(id);
+    setSelectedGroupId(null);
+  }
+
+  function handleSelectGroup(groupId: string | null) {
+    if (!groupId) {
+      setSelectedGroupId(null);
+      setSelectedPartId(null);
+      return;
+    }
+
+    setRig((prev) => ({
+      ...prev,
+      groups: (prev.groups ?? []).map((group) =>
+        group.id === groupId ? { ...group, isExpanded: true } : group
+      ),
+    }));
+    setSelectedGroupId(groupId);
+    setSelectedPartId(null);
   }
 
   function handleDeletePart(id: string) {
@@ -272,6 +294,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       groups: (prev.groups ?? []).filter((group) => group.id !== groupId),
       parts: prev.parts.map((part) => (part.groupId === groupId ? { ...part, groupId: null } : part)),
     }));
+    if (selectedGroupId === groupId) setSelectedGroupId(null);
   }
 
   function handleToggleGroupLock(groupId: string) {
@@ -571,6 +594,40 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     }));
   }
 
+  function handleMoveGroup(groupId: string, dx: number, dy: number) {
+    setRig((prev) => {
+      const group = findGroupById(prev.groups, groupId);
+      if (!group) return prev;
+
+      const groupParts = prev.parts.filter((part) => part.groupId === groupId);
+      if (groupParts.length === 0) return prev;
+      if (groupParts.some((part) => isPartEffectivelyLocked(part, prev.groups))) return prev;
+
+      return {
+        ...prev,
+        parts: prev.parts.map((part) => {
+          if (part.groupId !== groupId) return part;
+          return {
+            ...part,
+            bounds: {
+              ...part.bounds,
+              x: part.bounds.x + dx,
+              y: part.bounds.y + dy,
+            },
+            movementPoint: {
+              x: part.movementPoint.x + dx,
+              y: part.movementPoint.y + dy,
+            },
+            polygonPoints: part.polygonPoints?.map((point) => ({
+              x: point.x + dx,
+              y: point.y + dy,
+            })) ?? part.polygonPoints,
+          };
+        }),
+      };
+    });
+  }
+
   const handleZoomIn = useCallback(() => {
     setStageTransform((t) => ({ ...t, scale: Math.min(MAX_ZOOM, t.scale * (1 + ZOOM_STEP)) }));
   }, []);
@@ -683,10 +740,12 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             rig={rig}
             activeTool={activeTool}
             selectedPartId={selectedPartId}
+            selectedGroupId={selectedGroupId}
             onImageUpload={handleImageUpload}
             onSelectionComplete={handleSelectionComplete}
             onSelectPart={handleSelectPart}
             onMovementPointChange={handleMovementPointChange}
+            onMoveGroup={handleMoveGroup}
             stageTransform={stageTransform}
             onStageTransformChange={setStageTransform}
             resetKey={resetKey}
@@ -706,7 +765,9 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           parts={rig.parts}
           groups={rig.groups ?? []}
           selectedPartId={selectedPartId}
+          selectedGroupId={selectedGroupId}
           onSelectPart={handleSelectPart}
+          onSelectGroup={handleSelectGroup}
           onCreateGroup={handleCreateGroup}
           onRenameGroup={handleRenameGroup}
           onDeleteGroup={handleDeleteGroup}

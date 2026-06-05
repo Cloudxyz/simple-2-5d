@@ -8,7 +8,9 @@ interface PartsSidebarProps {
   parts: Part[];
   groups: LayerGroup[];
   selectedPartId: string | null;
+  selectedGroupId: string | null;
   onSelectPart: (id: string | null) => void;
+  onSelectGroup: (id: string | null) => void;
   onCreateGroup: () => void;
   onRenameGroup: (groupId: string, name: string) => void;
   onDeleteGroup: (groupId: string) => void;
@@ -77,7 +79,9 @@ export default function PartsSidebar({
   parts,
   groups,
   selectedPartId,
+  selectedGroupId,
   onSelectPart,
+  onSelectGroup,
   onCreateGroup,
   onRenameGroup,
   onDeleteGroup,
@@ -181,6 +185,15 @@ export default function PartsSidebar({
     }
 
     layerBlocks.push({ type: "part", item });
+  }
+
+  for (const group of groups) {
+    if (seenGroupIds.has(group.id)) continue;
+    layerBlocks.push({
+      type: "group",
+      group,
+      items: groupedParts.get(group.id) ?? [],
+    });
   }
 
   function startGroupRename(group: LayerGroup) {
@@ -405,6 +418,7 @@ export default function PartsSidebar({
 
               const { group, items: groupParts } = block;
               const isEditing = editingGroupId === group.id;
+              const isSelected = selectedGroupId === group.id;
               const isAssignTarget = dragOverGroupId === group.id && draggingPartId !== null;
               const isReorderTarget = dragOverFolderReorderId === group.id && draggingGroupId !== group.id;
 
@@ -412,6 +426,9 @@ export default function PartsSidebar({
                 <div key={group.id} className="mb-1">
                   <div
                     draggable
+                    onClick={() => {
+                      if (!isEditing) onSelectGroup(isSelected ? null : group.id);
+                    }}
                     onDragStart={(e) => {
                       setDraggingGroupId(group.id);
                       e.dataTransfer.effectAllowed = "move";
@@ -450,16 +467,22 @@ export default function PartsSidebar({
                       resetDragState();
                     }}
                     onDragEnd={resetDragState}
-                    className={`flex items-center gap-1 px-2 py-1.5 hover:bg-zinc-800/80 border-l-2 cursor-grab ${
+                    className={`flex items-center gap-1 px-2 py-1.5 cursor-grab border-l-2 ${
                       isAssignTarget || isReorderTarget
                         ? dragOverPosition === "after" && isReorderTarget
                           ? "border-violet-500 bg-zinc-800/90 ring-1 ring-inset ring-violet-500/60 border-b border-violet-500/70"
                           : "border-violet-500 bg-zinc-800/90 ring-1 ring-inset ring-violet-500/60"
-                        : "border-transparent"
+                        : isSelected
+                          ? "bg-violet-900/60 border-violet-400 shadow-[inset_0_0_0_1px_rgba(167,139,250,0.28)]"
+                          : "border-transparent hover:bg-zinc-800/80"
                     } ${draggingGroupId === group.id ? "opacity-60" : ""}`}
                   >
                     <button
-                      onClick={() => onToggleGroupExpanded(group.id)}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleGroupExpanded(group.id);
+                      }}
                       title={group.isExpanded ? "Collapse folder" : "Expand folder"}
                       className="w-4 text-xs text-zinc-500 hover:text-zinc-200 transition-colors"
                     >
@@ -472,6 +495,7 @@ export default function PartsSidebar({
                         value={editingGroupName}
                         onChange={(e) => setEditingGroupName(e.target.value)}
                         onBlur={commitGroupRename}
+                        onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") commitGroupRename();
                           if (e.key === "Escape") {
@@ -483,12 +507,16 @@ export default function PartsSidebar({
                       />
                     ) : (
                       <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectGroup(isSelected ? null : group.id);
+                        }}
                         onDoubleClick={() => startGroupRename(group)}
-                        onClick={() => onToggleGroupExpanded(group.id)}
                         className="flex-1 min-w-0 text-left"
                         title={group.name}
                       >
-                        <span className="block truncate text-sm text-zinc-200">📁 {group.name}</span>
+                        <span className={`block truncate text-sm ${isSelected ? "text-violet-200" : "text-zinc-200"}`}>📁 {group.name}</span>
                         <span className="block truncate text-[10px] text-zinc-500">
                           {groupParts.length} {groupParts.length === 1 ? "part" : "parts"}
                         </span>
@@ -497,7 +525,11 @@ export default function PartsSidebar({
 
                     {!isEditing && (
                       <button
-                        onClick={() => startGroupRename(group)}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startGroupRename(group);
+                        }}
                         title="Rename folder"
                         className="flex-shrink-0 rounded px-1 text-xs text-zinc-500 hover:bg-zinc-700 hover:text-zinc-200 transition-colors"
                       >
@@ -506,7 +538,11 @@ export default function PartsSidebar({
                     )}
 
                     <button
-                      onClick={() => onToggleGroupLock(group.id)}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleGroupLock(group.id);
+                      }}
                       title={group.isLocked ? "Unlock folder" : "Lock folder"}
                       className={`flex-shrink-0 rounded px-1 text-xs transition-colors ${
                         group.isLocked
@@ -518,7 +554,11 @@ export default function PartsSidebar({
                     </button>
 
                     <button
-                      onClick={() => onDeleteGroup(group.id)}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteGroup(group.id);
+                      }}
                       title="Delete folder"
                       className="flex-shrink-0 p-1 rounded text-zinc-700 hover:text-red-400 transition-colors"
                     >
