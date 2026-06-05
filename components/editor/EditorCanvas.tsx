@@ -1,17 +1,10 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback } from "react";
-import dynamic from "next/dynamic";
+import { Stage, Layer, Image as KonvaImage, Rect as KonvaRect, Circle as KonvaCircle, Line as KonvaLine } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as StageType } from "konva/lib/Stage";
 import type { BoundingBox, CharacterRig, Point } from "@/types/rig";
-
-const Stage = dynamic(() => import("react-konva").then((m) => m.Stage), { ssr: false });
-const Layer = dynamic(() => import("react-konva").then((m) => m.Layer), { ssr: false });
-const KonvaImage = dynamic(() => import("react-konva").then((m) => m.Image), { ssr: false });
-const KonvaRect = dynamic(() => import("react-konva").then((m) => m.Rect), { ssr: false });
-const KonvaCircle = dynamic(() => import("react-konva").then((m) => m.Circle), { ssr: false });
-const KonvaLine = dynamic(() => import("react-konva").then((m) => m.Line), { ssr: false });
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
