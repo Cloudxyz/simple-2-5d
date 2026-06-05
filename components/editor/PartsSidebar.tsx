@@ -188,6 +188,37 @@ export default function PartsSidebar({
   const [editingPartId, setEditingPartId] = useState<string | null>(null);
   const [editingPartName, setEditingPartName] = useState("");
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [isOrbiting, setIsOrbiting] = useState(false);
+  const orbitRafRef = useRef<number | null>(null);
+  const onSet2dPreviewRef = useRef(onSet2dPreview);
+  useEffect(() => { onSet2dPreviewRef.current = onSet2dPreview; }, [onSet2dPreview]);
+
+  function stopOrbit() {
+    if (orbitRafRef.current !== null) {
+      cancelAnimationFrame(orbitRafRef.current);
+      orbitRafRef.current = null;
+    }
+    setIsOrbiting(false);
+  }
+
+  useEffect(() => {
+    if (!isOrbiting) return;
+    const start = performance.now();
+    function tick(ts: number) {
+      const elapsed = ts - start;
+      const viewX = Math.sin(elapsed * 0.001);
+      const viewY = Math.sin(elapsed * 0.0005) * 0.25;
+      onSet2dPreviewRef.current({ enabled: true, viewX, viewY });
+      orbitRafRef.current = requestAnimationFrame(tick);
+    }
+    orbitRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (orbitRafRef.current !== null) {
+        cancelAnimationFrame(orbitRafRef.current);
+        orbitRafRef.current = null;
+      }
+    };
+  }, [isOrbiting]);
 
   const partsById = new Map(parts.map((part) => [part.id, part]));
   const groupsById = new Map(groups.map((group) => [group.id, group]));
@@ -1091,16 +1122,38 @@ export default function PartsSidebar({
       <div className="border-t border-zinc-800 flex-shrink-0 px-3 py-2 space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">2.5D Preview</p>
-          <button
-            onClick={() => onSet2dPreview({ ...preview2d, enabled: !preview2d.enabled })}
-            className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
-              preview2d.enabled
-                ? "border-violet-600 text-violet-300 bg-violet-900/30"
-                : "border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
-            }`}
-          >
-            {preview2d.enabled ? "On" : "Off"}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => {
+                if (isOrbiting) {
+                  stopOrbit();
+                } else {
+                  if (!preview2d.enabled) onSet2dPreview({ ...preview2d, enabled: true });
+                  setIsOrbiting(true);
+                }
+              }}
+              className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
+                isOrbiting
+                  ? "border-violet-600 text-violet-300 bg-violet-900/30"
+                  : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
+              }`}
+            >
+              {isOrbiting ? "Stop orbit" : "Auto orbit"}
+            </button>
+            <button
+              onClick={() => {
+                if (preview2d.enabled && isOrbiting) stopOrbit();
+                onSet2dPreview({ ...preview2d, enabled: !preview2d.enabled });
+              }}
+              className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
+                preview2d.enabled
+                  ? "border-violet-600 text-violet-300 bg-violet-900/30"
+                  : "border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              {preview2d.enabled ? "On" : "Off"}
+            </button>
+          </div>
         </div>
         {preview2d.enabled && (
           <>
@@ -1112,7 +1165,10 @@ export default function PartsSidebar({
                 max={1}
                 step={0.01}
                 value={preview2d.viewX}
-                onChange={(e) => onSet2dPreview({ ...preview2d, viewX: parseFloat(e.target.value) })}
+                onChange={(e) => {
+                  if (isOrbiting) stopOrbit();
+                  onSet2dPreview({ ...preview2d, viewX: parseFloat(e.target.value) });
+                }}
                 className="flex-1 accent-violet-500"
               />
               <span className="text-[11px] text-zinc-500 tabular-nums w-9 text-right">
@@ -1127,20 +1183,31 @@ export default function PartsSidebar({
                 max={1}
                 step={0.01}
                 value={preview2d.viewY}
-                onChange={(e) => onSet2dPreview({ ...preview2d, viewY: parseFloat(e.target.value) })}
+                onChange={(e) => {
+                  if (isOrbiting) stopOrbit();
+                  onSet2dPreview({ ...preview2d, viewY: parseFloat(e.target.value) });
+                }}
                 className="flex-1 accent-violet-500"
               />
               <span className="text-[11px] text-zinc-500 tabular-nums w-9 text-right">
                 {preview2d.viewY.toFixed(2)}
               </span>
             </div>
-            <button
-              onClick={() => onSet2dPreview({ ...preview2d, viewX: 0, viewY: 0 })}
-              disabled={preview2d.viewX === 0 && preview2d.viewY === 0}
-              className="text-[11px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              Reset view
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  stopOrbit();
+                  onSet2dPreview({ ...preview2d, viewX: 0, viewY: 0 });
+                }}
+                disabled={preview2d.viewX === 0 && preview2d.viewY === 0}
+                className="text-[11px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Reset view
+              </button>
+              {isOrbiting && (
+                <span className="text-[10px] text-zinc-600">Higher depth moves more during orbit.</span>
+              )}
+            </div>
           </>
         )}
       </div>
