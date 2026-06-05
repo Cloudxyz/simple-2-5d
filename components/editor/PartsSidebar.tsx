@@ -18,6 +18,12 @@ interface PartsSidebarProps {
   onPartRename: (partId: string, name: string) => void;
   onPartParentChange: (partId: string, parentId: string) => void;
   onPartReorderByDrag: (sourcePartId: string, targetPartId: string, placeAfter: boolean) => void;
+  onGroupReorderByDrag: (
+    sourceGroupId: string,
+    targetId: string,
+    targetType: "group" | "part",
+    placeAfter: boolean
+  ) => void;
   onDeletePart: (id: string) => void;
   onToggleLock: (id: string) => void;
   onToggleVisibility: (id: string) => void;
@@ -81,6 +87,7 @@ export default function PartsSidebar({
   onPartRename,
   onPartParentChange,
   onPartReorderByDrag,
+  onGroupReorderByDrag,
   onDeletePart,
   onToggleLock,
   onToggleVisibility,
@@ -94,7 +101,9 @@ export default function PartsSidebar({
   onResetRotation,
 }: PartsSidebarProps) {
   const [draggingPartId, setDraggingPartId] = useState<string | null>(null);
+  const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
   const [dragOverPartId, setDragOverPartId] = useState<string | null>(null);
+  const [dragOverFolderReorderId, setDragOverFolderReorderId] = useState<string | null>(null);
   const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
   const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
   const [isRootDragOver, setIsRootDragOver] = useState(false);
@@ -150,7 +159,29 @@ export default function PartsSidebar({
     if (!groupedParts.has(item.part.groupId)) groupedParts.set(item.part.groupId, []);
     groupedParts.get(item.part.groupId)!.push(item);
   }
-  const ungroupedParts = sortedParts.filter(({ part }) => !part.groupId || !groupsById.has(part.groupId));
+  const layerBlocks: Array<
+    | { type: "group"; group: LayerGroup; items: typeof sortedParts }
+    | { type: "part"; item: (typeof sortedParts)[number] }
+  > = [];
+  const seenGroupIds = new Set<string>();
+
+  for (const item of sortedParts) {
+    const groupId = item.part.groupId;
+    if (groupId && groupsById.has(groupId)) {
+      if (seenGroupIds.has(groupId)) continue;
+      seenGroupIds.add(groupId);
+      const group = groupsById.get(groupId);
+      if (!group) continue;
+      layerBlocks.push({
+        type: "group",
+        group,
+        items: groupedParts.get(groupId) ?? [],
+      });
+      continue;
+    }
+
+    layerBlocks.push({ type: "part", item });
+  }
 
   function startGroupRename(group: LayerGroup) {
     setEditingGroupId(group.id);
@@ -178,7 +209,9 @@ export default function PartsSidebar({
 
   function resetDragState() {
     setDraggingPartId(null);
+    setDraggingGroupId(null);
     setDragOverPartId(null);
+    setDragOverFolderReorderId(null);
     setDragOverPosition(null);
     setDragOverGroupId(null);
     setIsRootDragOver(false);
@@ -190,7 +223,8 @@ export default function PartsSidebar({
     const isDirectlyLocked = isPartDirectlyLocked(part);
     const isEffectivelyLocked = isPartEffectivelyLocked(part, groups);
     const isDragging = draggingPartId === part.id;
-    const isDragTarget = dragOverPartId === part.id && draggingPartId !== part.id;
+    const isDragTarget =
+      dragOverPartId === part.id && draggingPartId !== part.id && draggingGroupId === null;
     const isEditing = editingPartId === part.id;
     const indentPx = baseIndent + Math.min(depth, 4) * 12;
 
@@ -230,6 +264,9 @@ export default function PartsSidebar({
             if (sourcePartId && sourcePartId !== part.id) {
               onPartGroupChange(sourcePartId, part.groupId ?? "");
               onPartReorderByDrag(sourcePartId, part.id, dragOverPosition === "after");
+            }
+            if (draggingGroupId && draggingGroupId !== part.groupId) {
+              onGroupReorderByDrag(draggingGroupId, part.id, "part", dragOverPosition === "after");
             }
             resetDragState();
           }}
@@ -361,37 +398,65 @@ export default function PartsSidebar({
           </p>
         ) : (
           <div className="py-1">
-            {groups.map((group) => {
-              const groupParts = groupedParts.get(group.id) ?? [];
+            {layerBlocks.map((block) => {
+              if (block.type === "part") {
+                return <ul key={block.item.part.id}>{renderPartRow(block.item, 0)}</ul>;
+              }
+
+              const { group, items: groupParts } = block;
               const isEditing = editingGroupId === group.id;
-              const isDragTarget = dragOverGroupId === group.id;
+              const isAssignTarget = dragOverGroupId === group.id && draggingPartId !== null;
+              const isReorderTarget = dragOverFolderReorderId === group.id && draggingGroupId !== group.id;
+
               return (
                 <div key={group.id} className="mb-1">
                   <div
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggingGroupId(group.id);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", group.id);
+                    }}
                     onDragOver={(e) => {
                       e.preventDefault();
                       e.dataTransfer.dropEffect = "move";
-                      setDragOverGroupId(group.id);
-                      setDragOverPartId(null);
-                      setDragOverPosition(null);
                       setIsRootDragOver(false);
+                      const bounds = e.currentTarget.getBoundingClientRect();
+                      const halfwayY = bounds.top + bounds.height / 2;
+                      setDragOverPosition(e.clientY < halfwayY ? "before" : "after");
+                      if (draggingPartId) {
+                        setDragOverGroupId(group.id);
+                        setDragOverFolderReorderId(null);
+                        setDragOverPartId(null);
+                        return;
+                      }
+                      if (draggingGroupId && draggingGroupId !== group.id) {
+                        setDragOverFolderReorderId(group.id);
+                        setDragOverGroupId(null);
+                        setDragOverPartId(null);
+                      }
                     }}
                     onDragLeave={() => {
-                      if (dragOverGroupId === group.id) {
-                        setDragOverGroupId(null);
-                      }
+                      if (dragOverGroupId === group.id) setDragOverGroupId(null);
+                      if (dragOverFolderReorderId === group.id) setDragOverFolderReorderId(null);
                     }}
                     onDrop={(e) => {
                       e.preventDefault();
-                      const sourcePartId = draggingPartId ?? e.dataTransfer.getData("text/plain");
-                      if (sourcePartId) onPartGroupChange(sourcePartId, group.id);
+                      if (draggingPartId) {
+                        onPartGroupChange(draggingPartId, group.id);
+                      } else if (draggingGroupId && draggingGroupId !== group.id) {
+                        onGroupReorderByDrag(draggingGroupId, group.id, "group", dragOverPosition === "after");
+                      }
                       resetDragState();
                     }}
-                    className={`flex items-center gap-1 px-2 py-1.5 hover:bg-zinc-800/80 border-l-2 ${
-                      isDragTarget
-                        ? "border-violet-500 bg-zinc-800/90 ring-1 ring-inset ring-violet-500/60"
+                    onDragEnd={resetDragState}
+                    className={`flex items-center gap-1 px-2 py-1.5 hover:bg-zinc-800/80 border-l-2 cursor-grab ${
+                      isAssignTarget || isReorderTarget
+                        ? dragOverPosition === "after" && isReorderTarget
+                          ? "border-violet-500 bg-zinc-800/90 ring-1 ring-inset ring-violet-500/60 border-b border-violet-500/70"
+                          : "border-violet-500 bg-zinc-800/90 ring-1 ring-inset ring-violet-500/60"
                         : "border-transparent"
-                    }`}
+                    } ${draggingGroupId === group.id ? "opacity-60" : ""}`}
                   >
                     <button
                       onClick={() => onToggleGroupExpanded(group.id)}
@@ -477,6 +542,7 @@ export default function PartsSidebar({
                 e.dataTransfer.dropEffect = "move";
                 setIsRootDragOver(true);
                 setDragOverGroupId(null);
+                setDragOverFolderReorderId(null);
                 setDragOverPartId(null);
                 setDragOverPosition(null);
               }}
@@ -485,7 +551,7 @@ export default function PartsSidebar({
               }}
               onDrop={(e) => {
                 e.preventDefault();
-                const sourcePartId = draggingPartId ?? e.dataTransfer.getData("text/plain");
+                const sourcePartId = draggingPartId ?? (draggingGroupId ? "" : e.dataTransfer.getData("text/plain"));
                 if (sourcePartId) onPartGroupChange(sourcePartId, "");
                 resetDragState();
               }}
@@ -494,13 +560,9 @@ export default function PartsSidebar({
               <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-zinc-600">
                 Root layers
               </div>
-              {ungroupedParts.length > 0 ? (
-                <ul>{ungroupedParts.map((item) => renderPartRow(item, 0))}</ul>
-              ) : (
-                <div className="px-3 py-2 text-[11px] text-zinc-600">
-                  Drop here to remove a folder
-                </div>
-              )}
+              <div className="px-3 py-2 text-[11px] text-zinc-600">
+                Drop here to remove a folder
+              </div>
             </div>
           </div>
         )}

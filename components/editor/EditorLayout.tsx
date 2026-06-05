@@ -23,6 +23,7 @@ interface StageTransform {
 }
 
 type SaveStatus = "idle" | "saved" | "empty" | "error";
+type LayerOrderBlock = { type: "group" | "part"; id: string; partIds: string[] };
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
@@ -47,6 +48,32 @@ function reindexPartsFromFrontOrder(parts: Part[]): Part[] {
     ...part,
     zIndex: parts.length - 1 - index,
   }));
+}
+
+function buildLayerBlocks(parts: Part[], groups: LayerGroup[]): LayerOrderBlock[] {
+  const validGroupIds = new Set(groups.map((group) => group.id));
+  const frontSorted = [...parts].sort((a, b) => b.zIndex - a.zIndex);
+  const seenGroupIds = new Set<string>();
+  const blocks: LayerOrderBlock[] = [];
+
+  for (const part of frontSorted) {
+    if (part.groupId && validGroupIds.has(part.groupId)) {
+      if (seenGroupIds.has(part.groupId)) continue;
+      seenGroupIds.add(part.groupId);
+      blocks.push({
+        type: "group",
+        id: part.groupId,
+        partIds: frontSorted
+          .filter((item) => item.groupId === part.groupId)
+          .map((item) => item.id),
+      });
+      continue;
+    }
+
+    blocks.push({ type: "part", id: part.id, partIds: [part.id] });
+  }
+
+  return blocks;
 }
 
 export default function EditorLayout({ characterName, freshStart = false }: EditorLayoutProps) {
@@ -444,6 +471,34 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     });
   }
 
+  function handleGroupReorderByDrag(
+    sourceGroupId: string,
+    targetId: string,
+    targetType: "group" | "part",
+    placeAfter: boolean
+  ) {
+    setRig((prev) => {
+      const blocks = buildLayerBlocks(prev.parts, prev.groups ?? []);
+      const sourceIndex = blocks.findIndex((block) => block.type === "group" && block.id === sourceGroupId);
+      const targetIndex = blocks.findIndex((block) => block.type === targetType && block.id === targetId);
+      if (sourceIndex === -1 || targetIndex === -1) return prev;
+
+      const reorderedBlocks = [...blocks];
+      const [movedBlock] = reorderedBlocks.splice(sourceIndex, 1);
+      const normalizedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      const insertIndex = placeAfter ? normalizedTargetIndex + 1 : normalizedTargetIndex;
+      reorderedBlocks.splice(insertIndex, 0, movedBlock);
+
+      const partById = new Map(prev.parts.map((part) => [part.id, part]));
+      const reorderedParts = reorderedBlocks
+        .flatMap((block) => block.partIds)
+        .map((partId) => partById.get(partId))
+        .filter((part): part is Part => !!part);
+
+      return { ...prev, parts: reindexPartsFromFrontOrder(reorderedParts) };
+    });
+  }
+
   function handleMovePartUp(partId: string) {
     setRig((prev) => {
       const sorted = [...prev.parts].sort((a, b) => a.zIndex - b.zIndex);
@@ -661,6 +716,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onPartRename={handlePartRename}
           onPartParentChange={handlePartParentChange}
           onPartReorderByDrag={handlePartReorderByDrag}
+          onGroupReorderByDrag={handleGroupReorderByDrag}
           onDeletePart={handleDeletePart}
           onToggleLock={handleToggleLock}
           onToggleVisibility={handleToggleVisibility}
