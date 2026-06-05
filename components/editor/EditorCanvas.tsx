@@ -39,6 +39,19 @@ interface EditorCanvasProps {
   onPenComplete: (points: Point[]) => void;
   onPenCancel: () => void;
   onPolygonPointChange: (partId: string, pointIndex: number, nextPoint: Point) => void;
+  onPolygonPointInsert: (partId: string, afterIndex: number, point: Point) => void;
+}
+
+interface HoveredEdge {
+  partId: string;
+  edgeIndex: number;
+  /** Unrotated image-local coord to insert into polygonPoints */
+  insertPoint: Point;
+  /** Display (layer) coords of the edge endpoints — for rendering the highlight */
+  displayA: Point;
+  displayB: Point;
+  /** Display (layer) coord of the closest point on the edge — for the insertion marker */
+  displayInsert: Point;
 }
 
 interface LiveVertex {
@@ -112,6 +125,7 @@ export default function EditorCanvas({
   onPenComplete,
   onPenCancel,
   onPolygonPointChange,
+  onPolygonPointInsert,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -126,9 +140,10 @@ export default function EditorCanvas({
   const [penMousePos, setPenMousePos] = useState<Point | null>(null);
   const [dashOffset, setDashOffset] = useState(0);
   const [liveVertex, setLiveVertex] = useState<LiveVertex | null>(null);
+  const [hoveredEdge, setHoveredEdge] = useState<HoveredEdge | null>(null);
 
-  // Clear any in-flight vertex drag when the selected part changes
-  useEffect(() => { setLiveVertex(null); }, [selectedPartId]);
+  // Clear transient interaction state when the selected part changes
+  useEffect(() => { setLiveVertex(null); setHoveredEdge(null); }, [selectedPartId]);
 
   useEffect(() => {
     if (!rig.imageDataUrl) { setKonvaImage(null); return; }
@@ -241,6 +256,12 @@ export default function EditorCanvas({
     }
 
     if (activeTool === "select" && isLeft) {
+      // Insert a new polygon vertex when hovering an edge
+      if (hoveredEdge) {
+        onPolygonPointInsert(hoveredEdge.partId, hoveredEdge.edgeIndex, hoveredEdge.insertPoint);
+        setHoveredEdge(null);
+        return;
+      }
       const stage = stageRef.current;
       if (!stage) return;
       const pos = stage.getPointerPosition();
@@ -291,6 +312,75 @@ export default function EditorCanvas({
       const pos = stage.getPointerPosition();
       if (pos) setPenMousePos(toImageCoords(pos.x, pos.y));
     }
+
+    // Edge hover for polygon point insertion — only when select tool, no active vertex drag or rect drag
+    if (activeTool === "select" && !liveVertex && !dragStart) {
+      const selPart = selectedPartId
+        ? rig.parts.find((p) => p.id === selectedPartId && p.isVisible)
+        : null;
+      if (selPart?.polygonPoints && selPart.polygonPoints.length >= 3) {
+        const stage = stageRef.current;
+        const pos = stage?.getPointerPosition();
+        if (pos) {
+          const imgPos = toImageCoords(pos.x, pos.y);
+          const mp = selPart.movementPoint;
+          const rad = (selPart.rotation * Math.PI) / 180;
+          const cos = Math.cos(rad);
+          const sin = Math.sin(rad);
+          const THRESHOLD = 8 / stageTransform.scale;
+          const VERTEX_SNAP = 6 / stageTransform.scale;
+          const pts = selPart.polygonPoints;
+          const n = pts.length;
+          // Forward-rotate each stored vertex to its display position
+          const disp = pts.map((pt) => {
+            const dx = pt.x - mp.x;
+            const dy = pt.y - mp.y;
+            return { x: cos * dx - sin * dy + mp.x, y: sin * dx + cos * dy + mp.y };
+          });
+          let bestDist = THRESHOLD;
+          let best: HoveredEdge | null = null;
+          for (let i = 0; i < n; i++) {
+            const a = disp[i];
+            const b = disp[(i + 1) % n];
+            // Skip edge if pointer is within vertex-snap radius of either endpoint
+            if (Math.hypot(imgPos.x - a.x, imgPos.y - a.y) < VERTEX_SNAP) continue;
+            if (Math.hypot(imgPos.x - b.x, imgPos.y - b.y) < VERTEX_SNAP) continue;
+            const abx = b.x - a.x;
+            const aby = b.y - a.y;
+            const ab2 = abx * abx + aby * aby;
+            if (ab2 === 0) continue;
+            const t = Math.max(0, Math.min(1, ((imgPos.x - a.x) * abx + (imgPos.y - a.y) * aby) / ab2));
+            const qx = a.x + t * abx;
+            const qy = a.y + t * aby;
+            const dist = Math.hypot(imgPos.x - qx, imgPos.y - qy);
+            if (dist < bestDist) {
+              bestDist = dist;
+              // Inverse-rotate closest point back to unrotated polygon storage coords
+              const rdx = qx - mp.x;
+              const rdy = qy - mp.y;
+              best = {
+                partId: selPart.id,
+                edgeIndex: i,
+                insertPoint: {
+                  x: cos * rdx + sin * rdy + mp.x,
+                  y: -sin * rdx + cos * rdy + mp.y,
+                },
+                displayA: a,
+                displayB: b,
+                displayInsert: { x: qx, y: qy },
+              };
+            }
+          }
+          setHoveredEdge(best);
+        } else {
+          setHoveredEdge(null);
+        }
+      } else if (hoveredEdge) {
+        setHoveredEdge(null);
+      }
+    } else if (hoveredEdge) {
+      setHoveredEdge(null);
+    }
   }
 
   function handleMouseUp() {
@@ -332,6 +422,7 @@ export default function EditorCanvas({
     setDragStart(null);
     setDragCurrent(null);
     setPenMousePos(null);
+    setHoveredEdge(null);
   }
 
   const liveRect = dragStart && dragCurrent ? {
@@ -342,6 +433,7 @@ export default function EditorCanvas({
   } : null;
 
   const cursor = isPanning ? "grabbing"
+    : hoveredEdge ? "copy"
     : activeTool === "move" ? "grab"
     : activeTool === "select" ? "crosshair"
     : activeTool === "pen" ? "crosshair"
@@ -480,6 +572,33 @@ export default function EditorCanvas({
               dash={[4, 4]}
               listening={false}
             />
+          )}
+
+          {/* Blue edge highlight + insertion marker when hovering a polygon edge */}
+          {hoveredEdge && (
+            <>
+              <KonvaLine
+                points={[
+                  hoveredEdge.displayA.x, hoveredEdge.displayA.y,
+                  hoveredEdge.displayB.x, hoveredEdge.displayB.y,
+                ]}
+                stroke="rgba(59,130,246,0.9)"
+                strokeWidth={3 / sc}
+                strokeScaleEnabled={false}
+                lineCap="round"
+                listening={false}
+              />
+              <KonvaCircle
+                x={hoveredEdge.displayInsert.x}
+                y={hoveredEdge.displayInsert.y}
+                radius={4 / sc}
+                fill="rgba(59,130,246,1)"
+                stroke="rgba(255,255,255,0.8)"
+                strokeWidth={1}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
+            </>
           )}
 
           {/* Draggable vertex markers for the selected polygon part */}
