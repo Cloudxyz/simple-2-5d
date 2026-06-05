@@ -41,6 +41,13 @@ function wouldCreateParentCycle(parts: Part[], partId: string, nextParentId: str
   return false;
 }
 
+function reindexPartsFromFrontOrder(parts: Part[]): Part[] {
+  return parts.map((part, index) => ({
+    ...part,
+    zIndex: parts.length - 1 - index,
+  }));
+}
+
 export default function EditorLayout({ characterName, freshStart = false }: EditorLayoutProps) {
   const [rig, setRig] = useState<CharacterRig>({
     name: characterName,
@@ -146,6 +153,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       parentId: null,
       imageDataUrl: null,
       isVisible: true,
+      isLocked: false,
       rotation: 0,
       polygonPoints: penClosed && penPoints.length >= 3 ? [...penPoints] : null,
     };
@@ -167,6 +175,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   }
 
   function handleDeletePart(id: string) {
+    if (rig.parts.find((p) => p.id === id)?.isLocked) return;
     setRig((prev) => ({
       ...prev,
       parts: prev.parts
@@ -183,11 +192,19 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     }));
   }
 
+  function handleToggleLock(id: string) {
+    setRig((prev) => ({
+      ...prev,
+      parts: prev.parts.map((p) => (p.id === id ? { ...p, isLocked: !(p.isLocked ?? false) } : p)),
+    }));
+  }
+
   function handlePartParentChange(partId: string, parentId: string) {
     setRig((prev) => {
       const nextParentId = parentId || null;
       const part = prev.parts.find((p) => p.id === partId);
       if (!part) return prev;
+      if (part.isLocked) return prev;
       if (part.parentId === nextParentId) return prev;
 
       if (nextParentId === null) {
@@ -216,7 +233,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints) return p;
+        if (p.id !== partId || !p.polygonPoints || p.isLocked) return p;
         const updated = p.polygonPoints.map((pt, i) =>
           i === pointIndex
             ? { x: Math.round(nextPoint.x), y: Math.round(nextPoint.y) }
@@ -245,7 +262,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length <= 3) return p;
+        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length <= 3 || p.isLocked) return p;
         const updated = p.polygonPoints.filter((_, i) => i !== pointIndex);
         const xs = updated.map((pt) => pt.x);
         const ys = updated.map((pt) => pt.y);
@@ -274,7 +291,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length < 3) return p;
+        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length < 3 || p.isLocked) return p;
         const updated = [
           ...p.polygonPoints.slice(0, afterIndex + 1),
           { x: Math.round(point.x), y: Math.round(point.y) },
@@ -301,7 +318,9 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   function handleMovementPointChange(partId: string, point: { x: number; y: number }) {
     setRig((prev) => ({
       ...prev,
-      parts: prev.parts.map((p) => (p.id === partId ? { ...p, movementPoint: point } : p)),
+      parts: prev.parts.map((p) =>
+        p.id === partId && !p.isLocked ? { ...p, movementPoint: point } : p
+      ),
     }));
   }
 
@@ -313,6 +332,24 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       const part = sorted.splice(idx, 1)[0];
       sorted.push(part);
       return { ...prev, parts: sorted.map((p, i) => ({ ...p, zIndex: i })) };
+    });
+  }
+
+  function handlePartReorderByDrag(sourcePartId: string, targetPartId: string, placeAfter: boolean) {
+    setRig((prev) => {
+      if (sourcePartId === targetPartId) return prev;
+      const frontSorted = [...prev.parts].sort((a, b) => b.zIndex - a.zIndex);
+      const sourceIndex = frontSorted.findIndex((p) => p.id === sourcePartId);
+      const targetIndex = frontSorted.findIndex((p) => p.id === targetPartId);
+      if (sourceIndex === -1 || targetIndex === -1) return prev;
+
+      const reordered = [...frontSorted];
+      const [moved] = reordered.splice(sourceIndex, 1);
+      const normalizedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      const insertIndex = placeAfter ? normalizedTargetIndex + 1 : normalizedTargetIndex;
+      reordered.splice(insertIndex, 0, moved);
+
+      return { ...prev, parts: reindexPartsFromFrontOrder(reordered) };
     });
   }
 
@@ -351,7 +388,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId) return p;
+        if (p.id !== partId || p.isLocked) return p;
         return {
           ...p,
           movementPoint: {
@@ -367,7 +404,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) =>
-        p.id === partId ? { ...p, rotation: (p.rotation - 15 + 360) % 360 } : p
+        p.id === partId && !p.isLocked ? { ...p, rotation: (p.rotation - 15 + 360) % 360 } : p
       ),
     }));
   }
@@ -376,7 +413,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) =>
-        p.id === partId ? { ...p, rotation: (p.rotation + 15) % 360 } : p
+        p.id === partId && !p.isLocked ? { ...p, rotation: (p.rotation + 15) % 360 } : p
       ),
     }));
   }
@@ -384,7 +421,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   function handleResetRotation(partId: string) {
     setRig((prev) => ({
       ...prev,
-      parts: prev.parts.map((p) => (p.id === partId ? { ...p, rotation: 0 } : p)),
+      parts: prev.parts.map((p) => (p.id === partId && !p.isLocked ? { ...p, rotation: 0 } : p)),
     }));
   }
 
@@ -524,7 +561,9 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           selectedPartId={selectedPartId}
           onSelectPart={handleSelectPart}
           onPartParentChange={handlePartParentChange}
+          onPartReorderByDrag={handlePartReorderByDrag}
           onDeletePart={handleDeletePart}
+          onToggleLock={handleToggleLock}
           onToggleVisibility={handleToggleVisibility}
           onResetMovementPoint={handleResetMovementPoint}
           onMoveToFront={handleMovePartToFront}

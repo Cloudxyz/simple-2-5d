@@ -123,7 +123,7 @@ function isPointInPart(point: Point, part: Part): boolean {
 
 function findTopmostVisiblePartAtPoint(parts: Part[], point: Point): Part | null {
   const visibleParts = [...parts]
-    .filter((part) => part.isVisible)
+    .filter((part) => part.isVisible && !part.isLocked)
     .sort((a, b) => b.zIndex - a.zIndex);
 
   for (const part of visibleParts) {
@@ -219,6 +219,17 @@ export default function EditorCanvas({
   useEffect(() => { setLiveVertex(null); setHoveredEdge(null); setSelectedPolygonPointIdx(null); }, [selectedPartId]);
   // Clear vertex cursor override and selection when switching tools
   useEffect(() => { setVertexHovered(false); setHoveredEdge(null); setSelectedPolygonPointIdx(null); }, [activeTool]);
+  useEffect(() => {
+    const selectedPart = selectedPartId
+      ? rig.parts.find((part) => part.id === selectedPartId)
+      : null;
+    if (selectedPart?.isLocked) {
+      setLiveVertex(null);
+      setHoveredEdge(null);
+      setSelectedPolygonPointIdx(null);
+      setVertexHovered(false);
+    }
+  }, [rig.parts, selectedPartId]);
 
   useEffect(() => {
     if (!rig.imageDataUrl) { setKonvaImage(null); return; }
@@ -280,17 +291,19 @@ export default function EditorCanvas({
             e.preventDefault();
             onPenRemoveLastPoint();
           }
-        } else if (selectedPolygonPointIdx !== null && selectedPartId) {
-          // Existing polygon vertex selected: delete it
-          e.preventDefault();
-          onPolygonPointDelete(selectedPartId, selectedPolygonPointIdx);
+      } else if (selectedPolygonPointIdx !== null && selectedPartId) {
+        const selectedPart = rig.parts.find((p) => p.id === selectedPartId);
+        if (selectedPart?.isLocked) return;
+        // Existing polygon vertex selected: delete it
+        e.preventDefault();
+        onPolygonPointDelete(selectedPartId, selectedPolygonPointIdx);
           setSelectedPolygonPointIdx(null);
         }
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeTool, penClosed, penPoints, selectedPolygonPointIdx, selectedPartId,
+  }, [activeTool, penClosed, penPoints, rig.parts, selectedPolygonPointIdx, selectedPartId,
       onPenComplete, onPenCancel, onPenRemoveLastPoint, onPolygonPointDelete]);
 
   function loadFile(file: File) {
@@ -403,7 +416,7 @@ export default function EditorCanvas({
     // Edge hover for polygon point insertion — pen tool only, not while drawing a new polygon
     if (activeTool === "pen" && !liveVertex && penPoints.length === 0) {
       const selPart = selectedPartId
-        ? rig.parts.find((p) => p.id === selectedPartId && p.isVisible)
+        ? rig.parts.find((p) => p.id === selectedPartId && p.isVisible && !p.isLocked)
         : null;
       if (selPart?.polygonPoints && selPart.polygonPoints.length >= 3) {
         const stage = stageRef.current;
@@ -680,7 +693,7 @@ export default function EditorCanvas({
           {(() => {
             if (!selectedPartId) return null;
             const part = rig.parts.find((p) => p.id === selectedPartId && p.isVisible);
-            if (!part?.polygonPoints || part.polygonPoints.length < 3) return null;
+            if (!part?.polygonPoints || part.polygonPoints.length < 3 || part.isLocked) return null;
             const mp = part.movementPoint;
             const rad = (part.rotation * Math.PI) / 180;
             const cos = Math.cos(rad);
@@ -708,22 +721,22 @@ export default function EditorCanvas({
                       stroke={isSelected ? "rgba(167,139,250,1)" : "rgba(255,255,255,0.5)"}
                       strokeWidth={isSelected ? 2 : 1}
                       strokeScaleEnabled={false}
-                      draggable={activeTool === "pen"}
-                      onMouseEnter={() => { if (activeTool === "pen") setVertexHovered(true); }}
+                      draggable={activeTool === "pen" && !part.isLocked}
+                      onMouseEnter={() => { if (activeTool === "pen" && !part.isLocked) setVertexHovered(true); }}
                       onMouseLeave={() => setVertexHovered(false)}
                       onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
                         // Only block bubbling in pen mode so select-tool clicks
                         // still propagate to the polygon shape and select it
-                        if (activeTool === "pen") e.cancelBubble = true;
+                        if (activeTool === "pen" && !part.isLocked) e.cancelBubble = true;
                       }}
                       onClick={(e: KonvaEventObject<MouseEvent>) => {
-                        if (activeTool !== "pen") return;
+                        if (activeTool !== "pen" || part.isLocked) return;
                         e.cancelBubble = true;
                         // Toggle: clicking the already-selected vertex deselects it
                         setSelectedPolygonPointIdx(selectedPolygonPointIdx === i ? null : i);
                       }}
                       onDragMove={(e) => {
-                        if (activeTool !== "pen") return;
+                        if (activeTool !== "pen" || part.isLocked) return;
                         e.cancelBubble = true;
                         const sx = e.target.x();
                         const sy = e.target.y();
@@ -743,7 +756,7 @@ export default function EditorCanvas({
                         });
                       }}
                       onDragEnd={(e) => {
-                        if (activeTool !== "pen") return;
+                        if (activeTool !== "pen" || part.isLocked) return;
                         e.cancelBubble = true;
                         const sx = e.target.x();
                         const sy = e.target.y();
@@ -869,7 +882,7 @@ export default function EditorCanvas({
                   stroke={color}
                   strokeWidth={1.5}
                   strokeScaleEnabled={false}
-                  draggable={isPointTool}
+                  draggable={isPointTool && !selectedPart.isLocked}
                   onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
                     // Always stop bubbling so pan/selection don't fire
                     e.cancelBubble = true;

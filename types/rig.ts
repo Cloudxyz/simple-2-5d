@@ -23,6 +23,7 @@ export interface Part {
   /** Extracted PNG data URL for this part (set on export) */
   imageDataUrl: string | null;
   isVisible: boolean;
+  isLocked?: boolean;
   /** Rotation around the movement point, in degrees */
   rotation: number;
   /** Polygon vertices in image-local coords. Null for rectangle-created parts.

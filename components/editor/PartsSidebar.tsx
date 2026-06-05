@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { Part } from "@/types/rig";
 
 interface PartsSidebarProps {
@@ -7,7 +8,9 @@ interface PartsSidebarProps {
   selectedPartId: string | null;
   onSelectPart: (id: string | null) => void;
   onPartParentChange: (partId: string, parentId: string) => void;
+  onPartReorderByDrag: (sourcePartId: string, targetPartId: string, placeAfter: boolean) => void;
   onDeletePart: (id: string) => void;
+  onToggleLock: (id: string) => void;
   onToggleVisibility: (id: string) => void;
   onResetMovementPoint: (id: string) => void;
   onMoveToFront: (id: string) => void;
@@ -17,6 +20,22 @@ interface PartsSidebarProps {
   onRotateLeft: (id: string) => void;
   onRotateRight: (id: string) => void;
   onResetRotation: (id: string) => void;
+}
+
+function getPartDepth(part: Part, partsById: Map<string, Part>): number {
+  let depth = 0;
+  let currentParentId = part.parentId;
+  const visited = new Set<string>([part.id]);
+
+  while (currentParentId && depth < 4) {
+    const parent = partsById.get(currentParentId);
+    if (!parent || visited.has(currentParentId)) break;
+    visited.add(currentParentId);
+    depth += 1;
+    currentParentId = parent.parentId;
+  }
+
+  return depth;
 }
 
 function EyeOpenIcon() {
@@ -44,7 +63,9 @@ export default function PartsSidebar({
   selectedPartId,
   onSelectPart,
   onPartParentChange,
+  onPartReorderByDrag,
   onDeletePart,
+  onToggleLock,
   onToggleVisibility,
   onResetMovementPoint,
   onMoveToFront,
@@ -55,15 +76,25 @@ export default function PartsSidebar({
   onRotateRight,
   onResetRotation,
 }: PartsSidebarProps) {
-  // Display order: highest zIndex first (in front at top — matches Figma/Photoshop convention)
-  const sortedParts = [...parts].sort((a, b) => b.zIndex - a.zIndex);
+  const [draggingPartId, setDraggingPartId] = useState<string | null>(null);
+  const [dragOverPartId, setDragOverPartId] = useState<string | null>(null);
+  const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
+
+  const partsById = new Map(parts.map((part) => [part.id, part]));
+  const sortedParts = [...parts]
+    .sort((a, b) => b.zIndex - a.zIndex)
+    .map((part) => ({
+      part,
+      parent: part.parentId ? partsById.get(part.parentId) ?? null : null,
+      depth: getPartDepth(part, partsById),
+    }));
+
   const selectedPart = parts.find((p) => p.id === selectedPartId) ?? null;
   const parentOptions = selectedPart
-    ? sortedParts.filter((part) => part.id !== selectedPart.id)
+    ? sortedParts.map(({ part }) => part).filter((part) => part.id !== selectedPart.id)
     : [];
 
-  // Position of the selected part in sorted order (0 = front)
-  const selectedSortedIdx = sortedParts.findIndex((p) => p.id === selectedPartId);
+  const selectedSortedIdx = sortedParts.findIndex(({ part }) => part.id === selectedPartId);
   const isAtFront = selectedSortedIdx === 0;
   const isAtBack = selectedSortedIdx === sortedParts.length - 1;
 
@@ -80,27 +111,98 @@ export default function PartsSidebar({
           </p>
         ) : (
           <ul className="py-1">
-            {sortedParts.map((part) => {
+            {sortedParts.map(({ part, parent, depth }) => {
               const isSelected = part.id === selectedPartId;
+              const isLocked = part.isLocked ?? false;
+              const isDragging = draggingPartId === part.id;
+              const isDragTarget = dragOverPartId === part.id && draggingPartId !== part.id;
+              const indentPx = Math.min(depth, 4) * 12;
+
               return (
                 <li key={part.id}>
                   <div
-                    className={`flex items-center gap-1 px-2 py-1.5 group ${
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggingPartId(part.id);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", part.id);
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      if (draggingPartId !== part.id) {
+                        e.dataTransfer.dropEffect = "move";
+                        setDragOverPartId(part.id);
+                        const bounds = e.currentTarget.getBoundingClientRect();
+                        const halfwayY = bounds.top + bounds.height / 2;
+                        setDragOverPosition(e.clientY < halfwayY ? "before" : "after");
+                      }
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverPartId === part.id) {
+                        setDragOverPartId(null);
+                        setDragOverPosition(null);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const sourcePartId = draggingPartId ?? e.dataTransfer.getData("text/plain");
+                      if (sourcePartId && sourcePartId !== part.id) {
+                        onPartReorderByDrag(sourcePartId, part.id, dragOverPosition === "after");
+                      }
+                      setDraggingPartId(null);
+                      setDragOverPartId(null);
+                      setDragOverPosition(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggingPartId(null);
+                      setDragOverPartId(null);
+                      setDragOverPosition(null);
+                    }}
+                    className={`flex items-center gap-1 px-2 py-1.5 group cursor-grab ${
                       isSelected ? "bg-violet-900/50" : "hover:bg-zinc-800"
+                    } ${isDragging ? "opacity-60" : ""} ${
+                      isDragTarget
+                        ? dragOverPosition === "after"
+                          ? "bg-zinc-800 ring-1 ring-inset ring-violet-500/70 border-b border-violet-500/70"
+                          : "bg-zinc-800 ring-1 ring-inset ring-violet-500/70 border-t border-violet-500/70"
+                        : ""
                     }`}
                   >
-                    {/* Part name — click to select */}
+                    <div className="flex-1 min-w-0" style={{ paddingLeft: `${indentPx}px` }}>
+                      <button
+                        onClick={() => onSelectPart(isSelected ? null : part.id)}
+                        className={`w-full text-left transition-colors ${
+                          !part.isVisible ? "opacity-40" : ""
+                        }`}
+                        title={part.name}
+                      >
+                        <span
+                          className={`block truncate text-sm ${
+                            isSelected ? "text-violet-200" : "text-zinc-300"
+                          }`}
+                        >
+                          {depth > 0 ? "↳ " : ""}{part.name}
+                        </span>
+                        {parent && (
+                          <span className="block truncate text-[10px] text-zinc-500">
+                            follows {parent.name}
+                          </span>
+                        )}
+                      </button>
+                    </div>
+
                     <button
-                      onClick={() => onSelectPart(isSelected ? null : part.id)}
-                      className={`flex-1 text-left text-sm truncate transition-colors ${
-                        isSelected ? "text-violet-200" : "text-zinc-300"
-                      } ${!part.isVisible ? "opacity-40" : ""}`}
-                      title={part.name}
+                      onClick={() => onToggleLock(part.id)}
+                      title={isLocked ? "Unlock" : "Lock"}
+                      className={`flex-shrink-0 rounded px-1 text-xs transition-colors ${
+                        isLocked
+                          ? "text-amber-300 hover:bg-zinc-800"
+                          : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                      }`}
                     >
-                      {part.name}
+                      {isLocked ? "🔒" : "🔓"}
                     </button>
 
-                    {/* Visibility toggle */}
                     <button
                       onClick={() => onToggleVisibility(part.id)}
                       title={part.isVisible ? "Hide" : "Show"}
@@ -113,11 +215,15 @@ export default function PartsSidebar({
                       {part.isVisible ? <EyeOpenIcon /> : <EyeClosedIcon />}
                     </button>
 
-                    {/* Delete */}
                     <button
                       onClick={() => onDeletePart(part.id)}
-                      title="Delete part"
-                      className="flex-shrink-0 p-1 rounded text-zinc-700 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                      disabled={isLocked}
+                      title={isLocked ? "Unlock to delete" : "Delete part"}
+                      className={`flex-shrink-0 p-1 rounded transition-colors ${
+                        isLocked
+                          ? "text-zinc-800 cursor-not-allowed opacity-40"
+                          : "text-zinc-700 hover:text-red-400 opacity-0 group-hover:opacity-100"
+                      }`}
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                         <line x1="18" y1="6" x2="6" y2="18" />
@@ -132,7 +238,6 @@ export default function PartsSidebar({
         )}
       </div>
 
-      {/* Selected part detail panel */}
       {selectedPart && (
         <div className="border-t border-zinc-800 px-3 py-2.5 space-y-2.5">
           <p className="text-xs font-medium text-zinc-400 truncate" title={selectedPart.name}>
@@ -147,9 +252,9 @@ export default function PartsSidebar({
               id="part-parent"
               value={selectedPart.parentId ?? ""}
               onChange={(e) => onPartParentChange(selectedPart.id, e.target.value)}
-              disabled={parentOptions.length === 0}
+              disabled={parentOptions.length === 0 || !!selectedPart.isLocked}
               className={`w-full rounded border bg-zinc-950 px-2 py-1 text-xs outline-none transition-colors ${
-                parentOptions.length === 0
+                parentOptions.length === 0 || selectedPart.isLocked
                   ? "cursor-not-allowed border-zinc-800 text-zinc-700"
                   : "border-zinc-800 text-zinc-300 hover:border-zinc-700 focus:border-violet-500"
               }`}
@@ -163,7 +268,6 @@ export default function PartsSidebar({
             </select>
           </div>
 
-          {/* Layer order controls */}
           {parts.length > 1 && (
             <div className="space-y-1">
               <p className="text-xs text-zinc-600">Layer order</p>
@@ -200,7 +304,6 @@ export default function PartsSidebar({
             </div>
           )}
 
-          {/* Rotation preview — only when the part is visible */}
           {selectedPart.isVisible && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
@@ -210,37 +313,31 @@ export default function PartsSidebar({
                 </span>
               </div>
               <div className="flex gap-1">
-                <button
+                <OrderButton
                   onClick={() => onRotateLeft(selectedPart.id)}
+                  disabled={!!selectedPart.isLocked}
                   title="Rotate left"
-                  className="flex-1 py-1 rounded text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                 >
                   ↺
-                </button>
-                <button
+                </OrderButton>
+                <OrderButton
                   onClick={() => onRotateRight(selectedPart.id)}
+                  disabled={!!selectedPart.isLocked}
                   title="Rotate right"
-                  className="flex-1 py-1 rounded text-sm text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                 >
                   ↻
-                </button>
-                <button
+                </OrderButton>
+                <OrderButton
                   onClick={() => onResetRotation(selectedPart.id)}
-                  disabled={selectedPart.rotation === 0}
+                  disabled={selectedPart.rotation === 0 || !!selectedPart.isLocked}
                   title="Reset rotation"
-                  className={`flex-1 py-1 rounded text-xs transition-colors ${
-                    selectedPart.rotation === 0
-                      ? "text-zinc-700 cursor-not-allowed"
-                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
-                  }`}
                 >
                   0°
-                </button>
+                </OrderButton>
               </div>
             </div>
           )}
 
-          {/* Movement point */}
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-zinc-600 flex items-center gap-1">
               <span className="text-amber-500/70">⊕</span>
@@ -248,8 +345,13 @@ export default function PartsSidebar({
             </span>
             <button
               onClick={() => onResetMovementPoint(selectedPart.id)}
+              disabled={!!selectedPart.isLocked}
               title="Reset movement point to center"
-              className="text-xs text-zinc-500 hover:text-zinc-200 transition-colors whitespace-nowrap"
+              className={`text-xs transition-colors whitespace-nowrap ${
+                selectedPart.isLocked
+                  ? "text-zinc-700 cursor-not-allowed"
+                  : "text-zinc-500 hover:text-zinc-200"
+              }`}
             >
               Reset point
             </button>

@@ -42,6 +42,7 @@ export function loadProject(): CharacterRig | null {
     rig.parts = rig.parts.map((p) => ({
       ...p,
       parentId: (p as { parentId?: string | null }).parentId ?? null,
+      isLocked: (p as { isLocked?: boolean }).isLocked ?? false,
       rotation: (p as { rotation?: number }).rotation ?? 0,
       polygonPoints: (p as { polygonPoints?: import("@/types/rig").Point[] | null }).polygonPoints ?? null,
     }));
