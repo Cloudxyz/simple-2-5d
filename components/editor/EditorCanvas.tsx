@@ -52,6 +52,7 @@ interface EditorCanvasProps {
   onGroupDragEnd?: () => void;
   showStructure?: boolean;
   onPartLink?: (childId: string, parentId: string) => void;
+  previewRotations?: Record<string, number> | null;
 }
 
 interface LinkDrag {
@@ -342,6 +343,7 @@ export default function EditorCanvas({
   onGroupDragEnd,
   showStructure = false,
   onPartLink,
+  previewRotations = null,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -795,8 +797,15 @@ export default function EditorCanvas({
     : activeTool === "pen" ? "crosshair"
     : "default";
 
+  // During animation preview, overlay preview rotations without mutating rig
+  const displayParts = previewRotations
+    ? rig.parts.map((p) =>
+        previewRotations[p.id] !== undefined ? { ...p, rotation: previewRotations[p.id] } : p
+      )
+    : rig.parts;
+
   // The part whose pivot we show — must be selected and visible
-  const selectedPart = rig.parts.find(
+  const selectedPart = displayParts.find(
     (p) => p.id === selectedPartId && isPartEffectivelyVisible(p, rig.groups)
   ) ?? null;
 
@@ -845,7 +854,7 @@ export default function EditorCanvas({
           {/* Saved parts — sorted ascending so higher zIndex renders on top.
                Parts with active ancestor rotation render using fully computed display points.
                Others use Konva's native x/offsetX rotation trick for their local rotation. */}
-          {[...rig.parts].sort((a, b) => a.zIndex - b.zIndex).map((part) => {
+          {[...displayParts].sort((a, b) => a.zIndex - b.zIndex).map((part) => {
             if (!isPartEffectivelyVisible(part, rig.groups)) return null;
             const sel = part.id === selectedPartId;
             const mp = part.movementPoint;
@@ -854,9 +863,9 @@ export default function EditorCanvas({
             const strokeWidth = sel ? 2 : 1;
 
             // Render preview: apply inherited parent rotation transforms
-            const partAncestors = getAncestorChain(rig.parts, part.id);
+            const partAncestors = getAncestorChain(displayParts, part.id);
             if (partAncestors.some((a) => a.rotation !== 0)) {
-              const flatPts = getPartDisplayPoints(part, rig.parts).flatMap((p) => [p.x, p.y]);
+              const flatPts = getPartDisplayPoints(part, displayParts).flatMap((p) => [p.x, p.y]);
               return (
                 <KonvaLine
                   key={part.id}
@@ -949,19 +958,19 @@ export default function EditorCanvas({
           {/* Structure overlay — parent→child connection lines */}
           {showStructure && (() => {
             const visibleIds = new Set(
-              rig.parts.filter((p) => isPartEffectivelyVisible(p, rig.groups)).map((p) => p.id)
+              displayParts.filter((p) => isPartEffectivelyVisible(p, rig.groups)).map((p) => p.id)
             );
-            const partsById = new Map(rig.parts.map((p) => [p.id, p]));
+            const partsById = new Map(displayParts.map((p) => [p.id, p]));
             const lines: React.ReactNode[] = [];
             const dots = new Map<string, { pos: Point; isSelected: boolean }>();
 
-            for (const child of rig.parts) {
+            for (const child of displayParts) {
               if (!child.parentId || !visibleIds.has(child.id)) continue;
               const parent = partsById.get(child.parentId);
               if (!parent || !visibleIds.has(parent.id)) continue;
 
-              const parentPos = getDisplayMP(parent, rig.parts);
-              const childPos = getDisplayMP(child, rig.parts);
+              const parentPos = getDisplayMP(parent, displayParts);
+              const childPos = getDisplayMP(child, displayParts);
               const highlighted = child.id === selectedPartId || parent.id === selectedPartId;
 
               lines.push(
@@ -1003,12 +1012,12 @@ export default function EditorCanvas({
           {/* Link drag — target highlight and preview line */}
           {linkDrag && (() => {
             const targetPart = linkDrag.hoverTargetId
-              ? rig.parts.find((p) => p.id === linkDrag.hoverTargetId)
+              ? displayParts.find((p) => p.id === linkDrag.hoverTargetId)
               : null;
             return (
               <>
                 {targetPart && (() => {
-                  const pts = getPartDisplayPoints(targetPart, rig.parts);
+                  const pts = getPartDisplayPoints(targetPart, displayParts);
                   return (
                     <KonvaLine
                       points={pts.flatMap((p) => [p.x, p.y])}
@@ -1069,17 +1078,17 @@ export default function EditorCanvas({
                editing is blocked in that state to prevent corrupt stored coordinates. */}
           {(() => {
             if (!selectedPartId) return null;
-            const part = rig.parts.find((p) => p.id === selectedPartId && isPartEffectivelyVisible(p, rig.groups));
+            const part = displayParts.find((p) => p.id === selectedPartId && isPartEffectivelyVisible(p, rig.groups));
             if (!part?.polygonPoints || part.polygonPoints.length < 3 || isPartEffectivelyLocked(part, rig.groups)) return null;
             const mp = part.movementPoint;
             const rad = (part.rotation * Math.PI) / 180;
             const cos = Math.cos(rad);
             const sin = Math.sin(rad);
 
-            const vtxAncestors = getAncestorChain(rig.parts, part.id);
+            const vtxAncestors = getAncestorChain(displayParts, part.id);
             const hasActiveAncestorRot = vtxAncestors.some((a) => a.rotation !== 0);
             // Pre-compute display positions for all vertices when ancestor rotation is active
-            const inheritedPts = hasActiveAncestorRot ? getPartDisplayPoints(part, rig.parts) : null;
+            const inheritedPts = hasActiveAncestorRot ? getPartDisplayPoints(part, displayParts) : null;
 
             return (
               <>
@@ -1236,7 +1245,7 @@ export default function EditorCanvas({
                Displayed at the inherited world position so it stays "on" the rendered part.
                Drag end inverse-transforms back to image-local before storing. */}
           {selectedPart && (() => {
-            const mpAncestors = getAncestorChain(rig.parts, selectedPart.id);
+            const mpAncestors = getAncestorChain(displayParts, selectedPart.id);
             // Display the pivot at its world-space position (accounts for parent rotation)
             const dmp = applyAncestorTransform(selectedPart.movementPoint, mpAncestors);
             const isPointTool = activeTool === "point";

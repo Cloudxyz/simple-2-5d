@@ -52,6 +52,9 @@ interface PartsSidebarProps {
   onApplyPose: (poseId: string) => void;
   onRenamePose: (poseId: string, name: string) => void;
   onDeletePose: (poseId: string) => void;
+  isPreviewPlaying: boolean;
+  onStartPreview: (fromPoseId: string, toPoseId: string, durationSecs: number, loop: boolean) => void;
+  onStopPreview: () => void;
   history: HistoryEntry[];
   historyIndex: number;
   onHistoryJump: (index: number) => void;
@@ -129,6 +132,9 @@ export default function PartsSidebar({
   onApplyPose,
   onRenamePose,
   onDeletePose,
+  isPreviewPlaying,
+  onStartPreview,
+  onStopPreview,
   history,
   historyIndex,
   onHistoryJump,
@@ -138,6 +144,10 @@ export default function PartsSidebar({
   const [posesExpanded, setPosesExpanded] = useState(true);
   const [editingPoseId, setEditingPoseId] = useState<string | null>(null);
   const [editingPoseName, setEditingPoseName] = useState("");
+  const [previewFromId, setPreviewFromId] = useState<string>("");
+  const [previewToId, setPreviewToId] = useState<string>("");
+  const [previewDuration, setPreviewDuration] = useState<number>(1.0);
+  const [previewLoop, setPreviewLoop] = useState<boolean>(false);
 
   useEffect(() => {
     if (!historyExpanded || !historyListRef.current) return;
@@ -146,6 +156,13 @@ export default function PartsSidebar({
     const item = container.children[reversedIdx] as HTMLElement | undefined;
     item?.scrollIntoView({ block: "nearest" });
   }, [historyIndex, historyExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep From/To selects pointing to valid poses; auto-populate when first two exist
+  useEffect(() => {
+    const ids = poses.map((p) => p.id);
+    if (!ids.includes(previewFromId)) setPreviewFromId(ids[0] ?? "");
+    if (!ids.includes(previewToId)) setPreviewToId(ids[1] ?? ids[0] ?? "");
+  }, [poses]); // eslint-disable-line react-hooks/exhaustive-deps
   const [draggingPartId, setDraggingPartId] = useState<string | null>(null);
   const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
   const [dragOverPartId, setDragOverPartId] = useState<string | null>(null);
@@ -932,6 +949,85 @@ export default function PartsSidebar({
           </div>
         )}
       </div>
+
+      {/* Animation Preview panel */}
+      {poses.length >= 2 && (() => {
+        const canPreview = previewFromId && previewToId && previewFromId !== previewToId;
+        return (
+          <div className="border-t border-zinc-800 flex-shrink-0 px-3 py-2 space-y-1.5">
+            <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Animation Preview</p>
+            <div className="flex gap-1.5 items-center">
+              <span className="text-[11px] text-zinc-600 w-8 flex-shrink-0">From</span>
+              <select
+                value={previewFromId}
+                onChange={(e) => { onStopPreview(); setPreviewFromId(e.target.value); }}
+                className="flex-1 min-w-0 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 outline-none hover:border-zinc-700 focus:border-violet-500"
+              >
+                {poses.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-1.5 items-center">
+              <span className="text-[11px] text-zinc-600 w-8 flex-shrink-0">To</span>
+              <select
+                value={previewToId}
+                onChange={(e) => { onStopPreview(); setPreviewToId(e.target.value); }}
+                className="flex-1 min-w-0 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 outline-none hover:border-zinc-700 focus:border-violet-500"
+              >
+                {poses.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-3 items-center">
+              <div className="flex gap-1.5 items-center">
+                <span className="text-[11px] text-zinc-600">Duration</span>
+                <input
+                  type="number"
+                  min={0.1}
+                  max={30}
+                  step={0.1}
+                  value={previewDuration}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    if (!isNaN(v) && v > 0) setPreviewDuration(v);
+                  }}
+                  className="w-14 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 outline-none hover:border-zinc-700 focus:border-violet-500"
+                />
+                <span className="text-[11px] text-zinc-600">s</span>
+              </div>
+              <label className="flex gap-1 items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={previewLoop}
+                  onChange={(e) => setPreviewLoop(e.target.checked)}
+                  className="accent-violet-500"
+                />
+                <span className="text-[11px] text-zinc-400">Loop</span>
+              </label>
+            </div>
+            <div className="flex gap-1.5">
+              {isPreviewPlaying ? (
+                <button
+                  onClick={onStopPreview}
+                  className="flex-1 text-xs rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:border-red-600 hover:text-red-400 transition-colors"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  onClick={() => canPreview && onStartPreview(previewFromId, previewToId, previewDuration, previewLoop)}
+                  disabled={!canPreview}
+                  className={`flex-1 text-xs rounded border px-2 py-1 transition-colors ${
+                    canPreview
+                      ? "border-zinc-700 text-zinc-300 hover:border-violet-600 hover:text-violet-300"
+                      : "border-zinc-800 text-zinc-700 cursor-not-allowed"
+                  }`}
+                >
+                  Preview
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* History panel */}
       <div className="border-t border-zinc-800 flex-shrink-0">

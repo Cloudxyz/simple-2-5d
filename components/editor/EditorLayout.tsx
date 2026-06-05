@@ -165,7 +165,28 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   const [hist, dispatchHist] = useReducer(histReducer, { entries: [], index: -1 });
   const [pendingHistCommit, setPendingHistCommit] = useState<string | null>(null);
 
+  // Animation preview — transient, never saved or committed to history
+  const [previewRotations, setPreviewRotations] = useState<Record<string, number> | null>(null);
+  const previewRafRef = useRef<number | null>(null);
+  const previewConfigRef = useRef<{
+    fromRotations: Record<string, number>;
+    toRotations: Record<string, number>;
+    duration: number;
+    loop: boolean;
+    startTime: number;
+  } | null>(null);
+
+  function stopPreview() {
+    if (previewRafRef.current !== null) {
+      cancelAnimationFrame(previewRafRef.current);
+      previewRafRef.current = null;
+    }
+    previewConfigRef.current = null;
+    setPreviewRotations(null);
+  }
+
   function commitRig(nextRig: CharacterRig, label: string) {
+    stopPreview();
     dispatchHist({
       type: "commit",
       entry: { id: crypto.randomUUID(), label, rig: nextRig, timestamp: Date.now() },
@@ -789,6 +810,67 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     commitRig({ ...rig, poses: poses.filter((p) => p.id !== poseId) }, "Deleted pose");
   }
 
+  function handleStartPreview(
+    fromPoseId: string,
+    toPoseId: string,
+    durationSecs: number,
+    loop: boolean
+  ) {
+    const poses = rig.poses ?? [];
+    const fromPose = poses.find((p) => p.id === fromPoseId);
+    const toPose = poses.find((p) => p.id === toPoseId);
+    if (!fromPose || !toPose || fromPoseId === toPoseId) return;
+
+    // Cancel any in-flight RAF before starting fresh
+    if (previewRafRef.current !== null) cancelAnimationFrame(previewRafRef.current);
+
+    previewConfigRef.current = {
+      fromRotations: fromPose.rotations,
+      toRotations: toPose.rotations,
+      duration: durationSecs,
+      loop,
+      startTime: performance.now(),
+    };
+
+    function tick(now: number) {
+      const cfg = previewConfigRef.current;
+      if (!cfg) return;
+      const elapsed = (now - cfg.startTime) / 1000;
+      let t = Math.min(elapsed / cfg.duration, 1);
+
+      if (t >= 1) {
+        if (cfg.loop) {
+          cfg.startTime = now;
+          t = 0;
+        } else {
+          t = 1;
+          previewRafRef.current = null;
+          previewConfigRef.current = null;
+        }
+      }
+
+      const next: Record<string, number> = {};
+      for (const id of Object.keys(cfg.fromRotations)) {
+        if (cfg.toRotations[id] !== undefined) {
+          next[id] = cfg.fromRotations[id] + (cfg.toRotations[id] - cfg.fromRotations[id]) * t;
+        } else {
+          next[id] = cfg.fromRotations[id];
+        }
+      }
+      setPreviewRotations(next);
+
+      if (previewConfigRef.current !== null) {
+        previewRafRef.current = requestAnimationFrame(tick);
+      }
+    }
+
+    previewRafRef.current = requestAnimationFrame(tick);
+  }
+
+  function handleStopPreview() {
+    stopPreview();
+  }
+
   function handleRotateLeft(partId: string) {
     commitRig({
       ...rig,
@@ -1033,6 +1115,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             onGroupDragEnd={handleGroupDragEnd}
             showStructure={showStructure}
             onPartLink={handlePartLink}
+            previewRotations={previewRotations}
           />
         </div>
 
@@ -1068,6 +1151,9 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onRotateRight={handleRotateRight}
           onResetRotation={handleResetRotation}
           poses={rig.poses ?? []}
+          isPreviewPlaying={previewRafRef.current !== null || previewRotations !== null}
+          onStartPreview={handleStartPreview}
+          onStopPreview={handleStopPreview}
           onSavePose={handleSavePose}
           onApplyPose={handleApplyPose}
           onRenamePose={handleRenamePose}
