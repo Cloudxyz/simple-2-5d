@@ -4,7 +4,7 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { Stage, Layer, Image as KonvaImage, Rect as KonvaRect, Circle as KonvaCircle, Line as KonvaLine } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as StageType } from "konva/lib/Stage";
-import type { BoundingBox, CharacterRig, Point } from "@/types/rig";
+import type { BoundingBox, CharacterRig, Part, Point } from "@/types/rig";
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
@@ -62,6 +62,75 @@ interface LiveVertex {
   stagePos: Point;
   /** Inverse-rotated polygon coordinate — used to update KonvaLine points live */
   polygonPos: Point;
+}
+
+function inverseRotatePoint(point: Point, pivot: Point, rotation: number): Point {
+  const rad = (rotation * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = point.x - pivot.x;
+  const dy = point.y - pivot.y;
+  return {
+    x: cos * dx + sin * dy + pivot.x,
+    y: -sin * dx + cos * dy + pivot.y,
+  };
+}
+
+function isPointOnSegment(point: Point, a: Point, b: Point): boolean {
+  const cross = (point.y - a.y) * (b.x - a.x) - (point.x - a.x) * (b.y - a.y);
+  if (Math.abs(cross) > 1e-6) return false;
+
+  const dot = (point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y);
+  if (dot < 0) return false;
+
+  const lenSq = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+  return dot <= lenSq;
+}
+
+function isPointInPolygon(point: Point, polygon: Point[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[j];
+    const b = polygon[i];
+
+    if (isPointOnSegment(point, a, b)) return true;
+
+    const intersects =
+      (a.y > point.y) !== (b.y > point.y) &&
+      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y) + a.x;
+
+    if (intersects) inside = !inside;
+  }
+
+  return inside;
+}
+
+function isPointInPart(point: Point, part: Part): boolean {
+  const unrotatedPoint = inverseRotatePoint(point, part.movementPoint, part.rotation);
+
+  if (part.polygonPoints && part.polygonPoints.length >= 3) {
+    return isPointInPolygon(unrotatedPoint, part.polygonPoints);
+  }
+
+  const { bounds } = part;
+  return (
+    unrotatedPoint.x >= bounds.x &&
+    unrotatedPoint.x <= bounds.x + bounds.width &&
+    unrotatedPoint.y >= bounds.y &&
+    unrotatedPoint.y <= bounds.y + bounds.height
+  );
+}
+
+function findTopmostVisiblePartAtPoint(parts: Part[], point: Point): Part | null {
+  const visibleParts = [...parts]
+    .filter((part) => part.isVisible)
+    .sort((a, b) => b.zIndex - a.zIndex);
+
+  for (const part of visibleParts) {
+    if (isPointInPart(point, part)) return part;
+  }
+
+  return null;
 }
 
 function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
@@ -426,7 +495,8 @@ export default function EditorCanvas({
           height: Math.round(Math.min(dy, ih - clampedY)),
         });
       } else {
-        onSelectPart(null);
+        const hitPart = findTopmostVisiblePartAtPoint(rig.parts, dragCurrent);
+        onSelectPart(hitPart?.id ?? null);
       }
 
       setDragStart(null);
@@ -536,17 +606,10 @@ export default function EditorCanvas({
                   offsetY={mp.y}
                   rotation={part.rotation}
                   closed
-                  stroke={stroke}
-                  strokeWidth={strokeWidth}
-                  strokeScaleEnabled={false}
-                  fill={fill}
-                  onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
-                    if (activeTool === "select" && e.evt.button === 0) e.cancelBubble = true;
-                  }}
-                  onClick={(e: KonvaEventObject<MouseEvent>) => {
-                    e.cancelBubble = true;
-                    onSelectPart(part.id);
-                  }}
+                stroke={stroke}
+                strokeWidth={strokeWidth}
+                strokeScaleEnabled={false}
+                fill={fill}
                 />
               );
             }
@@ -566,13 +629,6 @@ export default function EditorCanvas({
                 strokeWidth={strokeWidth}
                 strokeScaleEnabled={false}
                 fill={fill}
-                onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
-                  if (activeTool === "select" && e.evt.button === 0) e.cancelBubble = true;
-                }}
-                onClick={(e: KonvaEventObject<MouseEvent>) => {
-                  e.cancelBubble = true;
-                  onSelectPart(part.id);
-                }}
               />
             );
           })}
