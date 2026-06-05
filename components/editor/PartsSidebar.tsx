@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Part } from "@/types/rig";
 
 interface PartsSidebarProps {
@@ -83,6 +83,7 @@ export default function PartsSidebar({
   const [draggingPartId, setDraggingPartId] = useState<string | null>(null);
   const [dragOverPartId, setDragOverPartId] = useState<string | null>(null);
   const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const partsById = new Map(parts.map((part) => [part.id, part]));
   const sortedParts = [...parts]
@@ -101,6 +102,13 @@ export default function PartsSidebar({
   const selectedSortedIdx = sortedParts.findIndex(({ part }) => part.id === selectedPartId);
   const isAtFront = selectedSortedIdx === 0;
   const isAtBack = selectedSortedIdx === sortedParts.length - 1;
+
+  useEffect(() => {
+    if (!selectedPartId) return;
+    rowRefs.current[selectedPartId]?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [selectedPartId]);
 
   return (
     <aside className="w-56 bg-zinc-900 border-l border-zinc-800 flex flex-col flex-shrink-0">
@@ -125,6 +133,9 @@ export default function PartsSidebar({
               return (
                 <li key={part.id}>
                   <div
+                    ref={(node) => {
+                      rowRefs.current[part.id] = node;
+                    }}
                     draggable
                     onDragStart={(e) => {
                       setDraggingPartId(part.id);
@@ -162,8 +173,10 @@ export default function PartsSidebar({
                       setDragOverPartId(null);
                       setDragOverPosition(null);
                     }}
-                    className={`flex items-center gap-1 px-2 py-1.5 group cursor-grab ${
-                      isSelected ? "bg-violet-900/50" : "hover:bg-zinc-800"
+                    className={`flex items-center gap-1 px-2 py-1.5 group cursor-grab border-l-2 ${
+                      isSelected
+                        ? "bg-violet-900/60 border-violet-400 shadow-[inset_0_0_0_1px_rgba(167,139,250,0.28)]"
+                        : "border-transparent hover:bg-zinc-800"
                     } ${isDragging ? "opacity-60" : ""} ${
                       isDragTarget
                         ? dragOverPosition === "after"
@@ -175,6 +188,7 @@ export default function PartsSidebar({
                     <div className="flex-1 min-w-0" style={{ paddingLeft: `${indentPx}px` }}>
                       <button
                         onClick={() => onSelectPart(isSelected ? null : part.id)}
+                        aria-current={isSelected ? "true" : undefined}
                         className={`w-full text-left transition-colors ${
                           !part.isVisible ? "opacity-40" : ""
                         }`}
