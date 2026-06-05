@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { findGroupById, isPartDirectlyLocked, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
-import type { CharacterRig, LayerGroup, Part } from "@/types/rig";
+import type { CharacterRig, LayerGroup, Part, SavedPose } from "@/types/rig";
 
 interface HistoryEntry {
   id: string;
@@ -47,6 +47,11 @@ interface PartsSidebarProps {
   onRotateLeft: (id: string) => void;
   onRotateRight: (id: string) => void;
   onResetRotation: (id: string) => void;
+  poses: SavedPose[];
+  onSavePose: () => void;
+  onApplyPose: (poseId: string) => void;
+  onRenamePose: (poseId: string, name: string) => void;
+  onDeletePose: (poseId: string) => void;
   history: HistoryEntry[];
   historyIndex: number;
   onHistoryJump: (index: number) => void;
@@ -119,12 +124,20 @@ export default function PartsSidebar({
   onRotateLeft,
   onRotateRight,
   onResetRotation,
+  poses,
+  onSavePose,
+  onApplyPose,
+  onRenamePose,
+  onDeletePose,
   history,
   historyIndex,
   onHistoryJump,
 }: PartsSidebarProps) {
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const historyListRef = useRef<HTMLDivElement>(null);
+  const [posesExpanded, setPosesExpanded] = useState(true);
+  const [editingPoseId, setEditingPoseId] = useState<string | null>(null);
+  const [editingPoseName, setEditingPoseName] = useState("");
 
   useEffect(() => {
     if (!historyExpanded || !historyListRef.current) return;
@@ -835,6 +848,90 @@ export default function PartsSidebar({
           </div>
         </div>
       )}
+
+      {/* Poses panel */}
+      <div className="border-t border-zinc-800 flex-shrink-0">
+        <button
+          onClick={() => setPosesExpanded((v) => !v)}
+          className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition-colors"
+        >
+          <span>Poses</span>
+          <span className="text-zinc-600">{posesExpanded ? "▾" : "▸"}</span>
+        </button>
+        {posesExpanded && (
+          <div className="border-t border-zinc-800/60">
+            <div className="px-3 py-1.5">
+              <button
+                onClick={onSavePose}
+                className="w-full text-xs rounded border border-zinc-700 px-2 py-1 text-zinc-400 hover:border-violet-600 hover:text-violet-300 transition-colors"
+              >
+                + Save pose
+              </button>
+            </div>
+            {poses.length === 0 ? (
+              <p className="px-3 pb-2 text-[11px] text-zinc-600">No poses saved yet.</p>
+            ) : (
+              <ul className="pb-1">
+                {poses.map((pose) => (
+                  <li key={pose.id} className="flex items-center gap-1 px-2 py-0.5 group">
+                    {editingPoseId === pose.id ? (
+                      <input
+                        autoFocus
+                        value={editingPoseName}
+                        onChange={(e) => setEditingPoseName(e.target.value)}
+                        onBlur={() => {
+                          onRenamePose(pose.id, editingPoseName);
+                          setEditingPoseId(null);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            onRenamePose(pose.id, editingPoseName);
+                            setEditingPoseId(null);
+                          } else if (e.key === "Escape") {
+                            setEditingPoseId(null);
+                          }
+                        }}
+                        className="flex-1 min-w-0 bg-zinc-900 border border-violet-600 rounded px-1 py-0.5 text-xs text-zinc-200 outline-none"
+                      />
+                    ) : (
+                      <span
+                        className="flex-1 min-w-0 truncate text-[11px] text-zinc-300 cursor-default"
+                        title={pose.name}
+                      >
+                        {pose.name}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => onApplyPose(pose.id)}
+                      title="Apply this pose"
+                      className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-violet-600 hover:text-violet-300 transition-colors"
+                    >
+                      Apply
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditingPoseId(pose.id);
+                        setEditingPoseName(pose.name);
+                      }}
+                      title="Rename pose"
+                      className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-zinc-300 transition-colors opacity-0 group-hover:opacity-100"
+                    >
+                      ✎
+                    </button>
+                    <button
+                      onClick={() => onDeletePose(pose.id)}
+                      title="Delete pose"
+                      className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-red-700 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* History panel */}
       <div className="border-t border-zinc-800 flex-shrink-0">

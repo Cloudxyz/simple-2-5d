@@ -40,11 +40,20 @@ export interface LayerGroup {
   isVisible?: boolean;
 }
 
+export interface SavedPose {
+  id: string;
+  name: string;
+  /** Part id → rotation in degrees at the time this pose was saved */
+  rotations: Record<string, number>;
+  createdAt: number;
+}
+
 export interface CharacterRig {
   name: string;
   imageDataUrl: string | null;
   parts: Part[];
   groups?: LayerGroup[];
+  poses?: SavedPose[];
 }
 
 export interface RigExport {

@@ -8,7 +8,7 @@ import Toolbar from "./Toolbar";
 import NamePartDialog from "./NamePartDialog";
 import { saveProject, loadProject, clearProject } from "@/lib/storage";
 import { findGroupById, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
-import type { BoundingBox, CharacterRig, LayerGroup, Part } from "@/types/rig";
+import type { BoundingBox, CharacterRig, LayerGroup, Part, SavedPose } from "@/types/rig";
 
 interface EditorLayoutProps {
   characterName: string;
@@ -741,6 +741,54 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     }, "Moved rotation point");
   }
 
+  function handleSavePose() {
+    const existingPoses = rig.poses ?? [];
+    const usedNums = existingPoses
+      .map((p) => { const m = p.name.match(/^Pose (\d+)$/); return m ? parseInt(m[1], 10) : 0; })
+      .filter((n) => n > 0);
+    const nextNum = usedNums.length > 0 ? Math.max(...usedNums) + 1 : 1;
+    const rotations: Record<string, number> = {};
+    for (const part of rig.parts) rotations[part.id] = part.rotation;
+    const newPose: SavedPose = {
+      id: crypto.randomUUID(),
+      name: `Pose ${nextNum}`,
+      rotations,
+      createdAt: Date.now(),
+    };
+    commitRig({ ...rig, poses: [...existingPoses, newPose] }, "Saved pose");
+  }
+
+  function handleApplyPose(poseId: string) {
+    const pose = (rig.poses ?? []).find((p) => p.id === poseId);
+    if (!pose) return;
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) => {
+        if (isPartEffectivelyLocked(p, rig.groups)) return p;
+        if (pose.rotations[p.id] === undefined) return p;
+        return { ...p, rotation: pose.rotations[p.id] };
+      }),
+    }, "Applied pose");
+  }
+
+  function handleRenamePose(poseId: string, name: string) {
+    const poses = rig.poses ?? [];
+    const pose = poses.find((p) => p.id === poseId);
+    if (!pose) return;
+    const finalName = name.trim() || "Untitled pose";
+    if (pose.name === finalName) return;
+    commitRig(
+      { ...rig, poses: poses.map((p) => (p.id === poseId ? { ...p, name: finalName } : p)) },
+      "Renamed pose"
+    );
+  }
+
+  function handleDeletePose(poseId: string) {
+    const poses = rig.poses ?? [];
+    if (!poses.some((p) => p.id === poseId)) return;
+    commitRig({ ...rig, poses: poses.filter((p) => p.id !== poseId) }, "Deleted pose");
+  }
+
   function handleRotateLeft(partId: string) {
     commitRig({
       ...rig,
@@ -1019,6 +1067,11 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onRotateLeft={handleRotateLeft}
           onRotateRight={handleRotateRight}
           onResetRotation={handleResetRotation}
+          poses={rig.poses ?? []}
+          onSavePose={handleSavePose}
+          onApplyPose={handleApplyPose}
+          onRenamePose={handleRenamePose}
+          onDeletePose={handleDeletePose}
           history={hist.entries}
           historyIndex={hist.index}
           onHistoryJump={handleHistoryJump}

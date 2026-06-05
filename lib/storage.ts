@@ -53,6 +53,7 @@ export function loadProject(): CharacterRig | null {
       rotation: (p as { rotation?: number }).rotation ?? 0,
       polygonPoints: (p as { polygonPoints?: import("@/types/rig").Point[] | null }).polygonPoints ?? null,
     }));
+    rig.poses = rig.poses ?? [];
     return rig;
   } catch {
     return null;
