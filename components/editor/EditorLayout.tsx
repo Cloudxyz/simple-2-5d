@@ -269,7 +269,6 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => {
       const part = prev.parts.find((item) => item.id === partId);
       if (!part) return prev;
-      if (isPartEffectivelyLocked(part, prev.groups)) return prev;
       const nextGroupId = groupId || null;
       if (part.groupId === nextGroupId) return prev;
       if (nextGroupId && !findGroupById(prev.groups, nextGroupId)) return prev;
@@ -281,6 +280,14 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
         parts: prev.parts.map((item) => (item.id === partId ? { ...item, groupId: nextGroupId } : item)),
       };
     });
+  }
+
+  function handlePartRename(partId: string, name: string) {
+    const nextName = name.trim() || "Untitled part";
+    setRig((prev) => ({
+      ...prev,
+      parts: prev.parts.map((part) => (part.id === partId ? { ...part, name: nextName } : part)),
+    }));
   }
 
   function handlePartParentChange(partId: string, parentId: string) {
@@ -651,6 +658,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onToggleGroupLock={handleToggleGroupLock}
           onToggleGroupExpanded={handleToggleGroupExpanded}
           onPartGroupChange={handlePartGroupChange}
+          onPartRename={handlePartRename}
           onPartParentChange={handlePartParentChange}
           onPartReorderByDrag={handlePartReorderByDrag}
           onDeletePart={handleDeletePart}

@@ -15,6 +15,7 @@ interface PartsSidebarProps {
   onToggleGroupLock: (groupId: string) => void;
   onToggleGroupExpanded: (groupId: string) => void;
   onPartGroupChange: (partId: string, groupId: string) => void;
+  onPartRename: (partId: string, name: string) => void;
   onPartParentChange: (partId: string, parentId: string) => void;
   onPartReorderByDrag: (sourcePartId: string, targetPartId: string, placeAfter: boolean) => void;
   onDeletePart: (id: string) => void;
@@ -77,6 +78,7 @@ export default function PartsSidebar({
   onToggleGroupLock,
   onToggleGroupExpanded,
   onPartGroupChange,
+  onPartRename,
   onPartParentChange,
   onPartReorderByDrag,
   onDeletePart,
@@ -94,8 +96,12 @@ export default function PartsSidebar({
   const [draggingPartId, setDraggingPartId] = useState<string | null>(null);
   const [dragOverPartId, setDragOverPartId] = useState<string | null>(null);
   const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
+  const [dragOverGroupId, setDragOverGroupId] = useState<string | null>(null);
+  const [isRootDragOver, setIsRootDragOver] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
+  const [editingPartId, setEditingPartId] = useState<string | null>(null);
+  const [editingPartName, setEditingPartName] = useState("");
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const partsById = new Map(parts.map((part) => [part.id, part]));
@@ -131,6 +137,13 @@ export default function PartsSidebar({
     }
   }, [editingGroupId, groups]);
 
+  useEffect(() => {
+    if (editingPartId && !parts.some((part) => part.id === editingPartId)) {
+      setEditingPartId(null);
+      setEditingPartName("");
+    }
+  }, [editingPartId, parts]);
+
   const groupedParts = new Map<string, typeof sortedParts>();
   for (const item of sortedParts) {
     if (!item.part.groupId || !groupsById.has(item.part.groupId)) continue;
@@ -151,6 +164,26 @@ export default function PartsSidebar({
     setEditingGroupName("");
   }
 
+  function startPartRename(part: Part) {
+    setEditingPartId(part.id);
+    setEditingPartName(part.name);
+  }
+
+  function commitPartRename() {
+    if (!editingPartId) return;
+    onPartRename(editingPartId, editingPartName);
+    setEditingPartId(null);
+    setEditingPartName("");
+  }
+
+  function resetDragState() {
+    setDraggingPartId(null);
+    setDragOverPartId(null);
+    setDragOverPosition(null);
+    setDragOverGroupId(null);
+    setIsRootDragOver(false);
+  }
+
   function renderPartRow(item: (typeof sortedParts)[number], baseIndent: number) {
     const { part, parent, depth } = item;
     const isSelected = part.id === selectedPartId;
@@ -158,6 +191,7 @@ export default function PartsSidebar({
     const isEffectivelyLocked = isPartEffectivelyLocked(part, groups);
     const isDragging = draggingPartId === part.id;
     const isDragTarget = dragOverPartId === part.id && draggingPartId !== part.id;
+    const isEditing = editingPartId === part.id;
     const indentPx = baseIndent + Math.min(depth, 4) * 12;
 
     return (
@@ -176,6 +210,8 @@ export default function PartsSidebar({
             e.preventDefault();
             if (draggingPartId !== part.id) {
               e.dataTransfer.dropEffect = "move";
+              setDragOverGroupId(null);
+              setIsRootDragOver(false);
               setDragOverPartId(part.id);
               const bounds = e.currentTarget.getBoundingClientRect();
               const halfwayY = bounds.top + bounds.height / 2;
@@ -192,17 +228,12 @@ export default function PartsSidebar({
             e.preventDefault();
             const sourcePartId = draggingPartId ?? e.dataTransfer.getData("text/plain");
             if (sourcePartId && sourcePartId !== part.id) {
+              onPartGroupChange(sourcePartId, part.groupId ?? "");
               onPartReorderByDrag(sourcePartId, part.id, dragOverPosition === "after");
             }
-            setDraggingPartId(null);
-            setDragOverPartId(null);
-            setDragOverPosition(null);
+            resetDragState();
           }}
-          onDragEnd={() => {
-            setDraggingPartId(null);
-            setDragOverPartId(null);
-            setDragOverPosition(null);
-          }}
+          onDragEnd={resetDragState}
           className={`flex items-center gap-1 px-2 py-1.5 group cursor-grab border-l-2 ${
             isSelected
               ? "bg-violet-900/60 border-violet-400 shadow-[inset_0_0_0_1px_rgba(167,139,250,0.28)]"
@@ -216,28 +247,56 @@ export default function PartsSidebar({
           }`}
         >
           <div className="flex-1 min-w-0" style={{ paddingLeft: `${indentPx}px` }}>
-            <button
-              onClick={() => onSelectPart(isSelected ? null : part.id)}
-              aria-current={isSelected ? "true" : undefined}
-              className={`w-full text-left transition-colors ${
-                !part.isVisible ? "opacity-40" : ""
-              }`}
-              title={part.name}
-            >
-              <span
-                className={`block truncate text-sm ${
-                  isSelected ? "text-violet-200" : "text-zinc-300"
+            {isEditing ? (
+              <input
+                autoFocus
+                value={editingPartName}
+                onChange={(e) => setEditingPartName(e.target.value)}
+                onBlur={commitPartRename}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitPartRename();
+                  if (e.key === "Escape") {
+                    setEditingPartId(null);
+                    setEditingPartName("");
+                  }
+                }}
+                className="w-full rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-violet-500"
+              />
+            ) : (
+              <button
+                onClick={() => onSelectPart(isSelected ? null : part.id)}
+                onDoubleClick={() => startPartRename(part)}
+                aria-current={isSelected ? "true" : undefined}
+                className={`w-full text-left transition-colors ${
+                  !part.isVisible ? "opacity-40" : ""
                 }`}
+                title={part.name}
               >
-                {depth > 0 ? "↳ " : ""}{part.name}
-              </span>
-              {parent && (
-                <span className="block truncate text-[10px] text-zinc-500">
-                  follows {parent.name}
+                <span
+                  className={`block truncate text-sm ${
+                    isSelected ? "text-violet-200" : "text-zinc-300"
+                  }`}
+                >
+                  {depth > 0 ? "↳ " : ""}{part.name}
                 </span>
-              )}
-            </button>
+                {parent && (
+                  <span className="block truncate text-[10px] text-zinc-500">
+                    follows {parent.name}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
+
+          {!isEditing && (
+            <button
+              onClick={() => startPartRename(part)}
+              title="Rename part"
+              className="flex-shrink-0 rounded px-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+            >
+              ✎
+            </button>
+          )}
 
           <button
             onClick={() => onToggleLock(part.id)}
@@ -305,9 +364,35 @@ export default function PartsSidebar({
             {groups.map((group) => {
               const groupParts = groupedParts.get(group.id) ?? [];
               const isEditing = editingGroupId === group.id;
+              const isDragTarget = dragOverGroupId === group.id;
               return (
                 <div key={group.id} className="mb-1">
-                  <div className="flex items-center gap-1 px-2 py-1.5 hover:bg-zinc-800/80 border-l-2 border-transparent">
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setDragOverGroupId(group.id);
+                      setDragOverPartId(null);
+                      setDragOverPosition(null);
+                      setIsRootDragOver(false);
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverGroupId === group.id) {
+                        setDragOverGroupId(null);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const sourcePartId = draggingPartId ?? e.dataTransfer.getData("text/plain");
+                      if (sourcePartId) onPartGroupChange(sourcePartId, group.id);
+                      resetDragState();
+                    }}
+                    className={`flex items-center gap-1 px-2 py-1.5 hover:bg-zinc-800/80 border-l-2 ${
+                      isDragTarget
+                        ? "border-violet-500 bg-zinc-800/90 ring-1 ring-inset ring-violet-500/60"
+                        : "border-transparent"
+                    }`}
+                  >
                     <button
                       onClick={() => onToggleGroupExpanded(group.id)}
                       title={group.isExpanded ? "Collapse folder" : "Expand folder"}
@@ -386,9 +471,37 @@ export default function PartsSidebar({
               );
             })}
 
-            {ungroupedParts.length > 0 && (
-              <ul>{ungroupedParts.map((item) => renderPartRow(item, 0))}</ul>
-            )}
+            <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setIsRootDragOver(true);
+                setDragOverGroupId(null);
+                setDragOverPartId(null);
+                setDragOverPosition(null);
+              }}
+              onDragLeave={() => {
+                setIsRootDragOver(false);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const sourcePartId = draggingPartId ?? e.dataTransfer.getData("text/plain");
+                if (sourcePartId) onPartGroupChange(sourcePartId, "");
+                resetDragState();
+              }}
+              className={`mt-2 ${isRootDragOver ? "bg-zinc-800/60 ring-1 ring-inset ring-violet-500/60" : ""}`}
+            >
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-zinc-600">
+                Root layers
+              </div>
+              {ungroupedParts.length > 0 ? (
+                <ul>{ungroupedParts.map((item) => renderPartRow(item, 0))}</ul>
+              ) : (
+                <div className="px-3 py-2 text-[11px] text-zinc-600">
+                  Drop here to remove a folder
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
