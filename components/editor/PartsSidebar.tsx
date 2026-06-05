@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { findGroupById, isPartDirectlyLocked, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
-import type { CharacterRig, LayerGroup, Part, SavedPose, TimelineStep } from "@/types/rig";
+import type { CharacterRig, LayerGroup, Part, SavedPose } from "@/types/rig";
 
 interface HistoryEntry {
   id: string;
@@ -55,14 +55,6 @@ interface PartsSidebarProps {
   isPreviewPlaying: boolean;
   onStartPreview: (fromPoseId: string, toPoseId: string, durationSecs: number, loop: boolean) => void;
   onStopPreview: () => void;
-  timeline: TimelineStep[];
-  isTimelinePlaying: boolean;
-  onPlayTimeline: (loop: boolean) => void;
-  onStopTimeline: () => void;
-  onAddTimelineStep: (poseId: string) => void;
-  onRemoveTimelineStep: (stepId: string) => void;
-  onReorderTimelineStep: (stepId: string, direction: "up" | "down") => void;
-  onChangeTimelineStepDuration: (stepId: string, duration: number) => void;
   history: HistoryEntry[];
   historyIndex: number;
   onHistoryJump: (index: number) => void;
@@ -143,14 +135,6 @@ export default function PartsSidebar({
   isPreviewPlaying,
   onStartPreview,
   onStopPreview,
-  timeline,
-  isTimelinePlaying,
-  onPlayTimeline,
-  onStopTimeline,
-  onAddTimelineStep,
-  onRemoveTimelineStep,
-  onReorderTimelineStep,
-  onChangeTimelineStepDuration,
   history,
   historyIndex,
   onHistoryJump,
@@ -164,9 +148,6 @@ export default function PartsSidebar({
   const [previewToId, setPreviewToId] = useState<string>("");
   const [previewDuration, setPreviewDuration] = useState<number>(1.0);
   const [previewLoop, setPreviewLoop] = useState<boolean>(false);
-  const [timelineExpanded, setTimelineExpanded] = useState(true);
-  const [timelineAddPoseId, setTimelineAddPoseId] = useState<string>("");
-  const [timelineLoop, setTimelineLoop] = useState(false);
 
   useEffect(() => {
     if (!historyExpanded || !historyListRef.current) return;
@@ -183,10 +164,6 @@ export default function PartsSidebar({
     if (!ids.includes(previewToId)) setPreviewToId(ids[1] ?? ids[0] ?? "");
   }, [poses]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    const ids = poses.map((p) => p.id);
-    if (!ids.includes(timelineAddPoseId)) setTimelineAddPoseId(ids[0] ?? "");
-  }, [poses]); // eslint-disable-line react-hooks/exhaustive-deps
   const [draggingPartId, setDraggingPartId] = useState<string | null>(null);
   const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
   const [dragOverPartId, setDragOverPartId] = useState<string | null>(null);
@@ -1052,114 +1029,6 @@ export default function PartsSidebar({
           </div>
         );
       })()}
-
-      {/* Timeline panel */}
-      {poses.length >= 1 && (
-        <div className="border-t border-zinc-800 flex-shrink-0">
-          <button
-            onClick={() => setTimelineExpanded((v) => !v)}
-            className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition-colors"
-          >
-            <span>Timeline</span>
-            <span className="text-zinc-600">{timelineExpanded ? "▾" : "▸"}</span>
-          </button>
-          {timelineExpanded && (
-            <div className="border-t border-zinc-800/60 px-3 py-2 space-y-2">
-              {/* Add step row */}
-              <div className="flex gap-1.5 items-center">
-                <select
-                  value={timelineAddPoseId}
-                  onChange={(e) => setTimelineAddPoseId(e.target.value)}
-                  className="flex-1 min-w-0 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 outline-none hover:border-zinc-700 focus:border-violet-500"
-                >
-                  {poses.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-                <button
-                  onClick={() => timelineAddPoseId && onAddTimelineStep(timelineAddPoseId)}
-                  disabled={!timelineAddPoseId}
-                  className="text-[11px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-300 hover:border-violet-600 hover:text-violet-300 disabled:border-zinc-800 disabled:text-zinc-700 disabled:cursor-not-allowed transition-colors"
-                >
-                  + Add
-                </button>
-              </div>
-              {/* Step list */}
-              {timeline.length > 0 && (
-                <ul className="space-y-1">
-                  {timeline.map((step, idx) => {
-                    const poseName = poses.find((p) => p.id === step.poseId)?.name ?? "?";
-                    return (
-                      <li key={step.id} className="flex items-center gap-1">
-                        <span className="text-[10px] text-zinc-600 w-3 flex-shrink-0 text-right">{idx + 1}</span>
-                        <span className="flex-1 min-w-0 truncate text-[11px] text-zinc-300 ml-1">{poseName}</span>
-                        <input
-                          type="number"
-                          min={0.1}
-                          max={60}
-                          step={0.1}
-                          value={step.duration}
-                          onChange={(e) => {
-                            const v = parseFloat(e.target.value);
-                            if (!isNaN(v)) onChangeTimelineStepDuration(step.id, v);
-                          }}
-                          className="w-14 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 outline-none hover:border-zinc-700 focus:border-violet-500"
-                          title="Duration to next step (s)"
-                        />
-                        <span className="text-[10px] text-zinc-600">s</span>
-                        <button
-                          onClick={() => onReorderTimelineStep(step.id, "up")}
-                          disabled={idx === 0}
-                          className="text-[10px] px-1 py-0.5 rounded border border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                          title="Move up"
-                        >↑</button>
-                        <button
-                          onClick={() => onReorderTimelineStep(step.id, "down")}
-                          disabled={idx === timeline.length - 1}
-                          className="text-[10px] px-1 py-0.5 rounded border border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                          title="Move down"
-                        >↓</button>
-                        <button
-                          onClick={() => onRemoveTimelineStep(step.id)}
-                          className="text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-red-700 hover:text-red-400 transition-colors"
-                          title="Remove step"
-                        >✕</button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-              {/* Playback controls */}
-              {timeline.length >= 2 && (
-                <div className="flex gap-2 items-center">
-                  {isTimelinePlaying ? (
-                    <button
-                      onClick={onStopTimeline}
-                      className="flex-1 text-xs rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:border-red-600 hover:text-red-400 transition-colors"
-                    >
-                      Stop
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => onPlayTimeline(timelineLoop)}
-                      className="flex-1 text-xs rounded border border-zinc-700 px-2 py-1 text-zinc-300 hover:border-violet-600 hover:text-violet-300 transition-colors"
-                    >
-                      Play Timeline
-                    </button>
-                  )}
-                  <label className="flex gap-1 items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={timelineLoop}
-                      onChange={(e) => setTimelineLoop(e.target.checked)}
-                      className="accent-violet-500"
-                    />
-                    <span className="text-[11px] text-zinc-400">Loop</span>
-                  </label>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* History panel */}
       <div className="border-t border-zinc-800 flex-shrink-0">

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useReducer } from "react";
 import Link from "next/link";
 import EditorCanvas from "./EditorCanvas";
 import PartsSidebar from "./PartsSidebar";
+import TimelinePanel from "./TimelinePanel";
 import Toolbar from "./Toolbar";
 import NamePartDialog from "./NamePartDialog";
 import { saveProject, loadProject, clearProject } from "@/lib/storage";
@@ -1213,7 +1214,8 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
       {/* Main area */}
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1 relative">
+        <div className="flex flex-col flex-1 overflow-hidden">
+          <div className="flex-1 relative overflow-hidden">
           <EditorCanvas
             rig={rig}
             activeTool={activeTool}
@@ -1240,6 +1242,19 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             showStructure={showStructure}
             onPartLink={handlePartLink}
             previewRotations={previewRotations}
+          />
+          </div>
+
+          <TimelinePanel
+            poses={rig.poses ?? []}
+            timeline={rig.timeline ?? []}
+            isTimelinePlaying={isTimelinePlaying}
+            onAddTimelineStep={handleAddTimelineStep}
+            onRemoveTimelineStep={handleRemoveTimelineStep}
+            onReorderTimelineStep={handleReorderTimelineStep}
+            onChangeTimelineStepDuration={handleChangeTimelineStepDuration}
+            onPlayTimeline={handlePlayTimeline}
+            onStopPreview={handleStopPreview}
           />
         </div>
 
@@ -1282,14 +1297,6 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onApplyPose={handleApplyPose}
           onRenamePose={handleRenamePose}
           onDeletePose={handleDeletePose}
-          timeline={rig.timeline ?? []}
-          isTimelinePlaying={isTimelinePlaying}
-          onPlayTimeline={handlePlayTimeline}
-          onStopTimeline={handleStopPreview}
-          onAddTimelineStep={handleAddTimelineStep}
-          onRemoveTimelineStep={handleRemoveTimelineStep}
-          onReorderTimelineStep={handleReorderTimelineStep}
-          onChangeTimelineStepDuration={handleChangeTimelineStepDuration}
           history={hist.entries}
           historyIndex={hist.index}
           onHistoryJump={handleHistoryJump}
