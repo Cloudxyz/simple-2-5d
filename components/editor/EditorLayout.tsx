@@ -27,6 +27,20 @@ const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 0.15;
 
+function wouldCreateParentCycle(parts: Part[], partId: string, nextParentId: string): boolean {
+  const partsById = new Map(parts.map((part) => [part.id, part]));
+  const visited = new Set<string>([partId]);
+  let currentId: string | null = nextParentId;
+
+  while (currentId) {
+    if (visited.has(currentId)) return true;
+    visited.add(currentId);
+    currentId = partsById.get(currentId)?.parentId ?? null;
+  }
+
+  return false;
+}
+
 export default function EditorLayout({ characterName, freshStart = false }: EditorLayoutProps) {
   const [rig, setRig] = useState<CharacterRig>({
     name: characterName,
@@ -153,7 +167,12 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   }
 
   function handleDeletePart(id: string) {
-    setRig((prev) => ({ ...prev, parts: prev.parts.filter((p) => p.id !== id) }));
+    setRig((prev) => ({
+      ...prev,
+      parts: prev.parts
+        .filter((p) => p.id !== id)
+        .map((p) => (p.parentId === id ? { ...p, parentId: null } : p)),
+    }));
     if (selectedPartId === id) setSelectedPartId(null);
   }
 
@@ -162,6 +181,31 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       ...prev,
       parts: prev.parts.map((p) => (p.id === id ? { ...p, isVisible: !p.isVisible } : p)),
     }));
+  }
+
+  function handlePartParentChange(partId: string, parentId: string) {
+    setRig((prev) => {
+      const nextParentId = parentId || null;
+      const part = prev.parts.find((p) => p.id === partId);
+      if (!part) return prev;
+      if (part.parentId === nextParentId) return prev;
+
+      if (nextParentId === null) {
+        return {
+          ...prev,
+          parts: prev.parts.map((p) => (p.id === partId ? { ...p, parentId: null } : p)),
+        };
+      }
+
+      if (nextParentId === partId) return prev;
+      if (!prev.parts.some((p) => p.id === nextParentId)) return prev;
+      if (wouldCreateParentCycle(prev.parts, partId, nextParentId)) return prev;
+
+      return {
+        ...prev,
+        parts: prev.parts.map((p) => (p.id === partId ? { ...p, parentId: nextParentId } : p)),
+      };
+    });
   }
 
   function handlePolygonPointChange(
@@ -479,6 +523,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           parts={rig.parts}
           selectedPartId={selectedPartId}
           onSelectPart={handleSelectPart}
+          onPartParentChange={handlePartParentChange}
           onDeletePart={handleDeletePart}
           onToggleVisibility={handleToggleVisibility}
           onResetMovementPoint={handleResetMovementPoint}

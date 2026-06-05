@@ -6,6 +6,7 @@ interface PartsSidebarProps {
   parts: Part[];
   selectedPartId: string | null;
   onSelectPart: (id: string | null) => void;
+  onPartParentChange: (partId: string, parentId: string) => void;
   onDeletePart: (id: string) => void;
   onToggleVisibility: (id: string) => void;
   onResetMovementPoint: (id: string) => void;
@@ -42,6 +43,7 @@ export default function PartsSidebar({
   parts,
   selectedPartId,
   onSelectPart,
+  onPartParentChange,
   onDeletePart,
   onToggleVisibility,
   onResetMovementPoint,
@@ -56,6 +58,9 @@ export default function PartsSidebar({
   // Display order: highest zIndex first (in front at top — matches Figma/Photoshop convention)
   const sortedParts = [...parts].sort((a, b) => b.zIndex - a.zIndex);
   const selectedPart = parts.find((p) => p.id === selectedPartId) ?? null;
+  const parentOptions = selectedPart
+    ? sortedParts.filter((part) => part.id !== selectedPart.id)
+    : [];
 
   // Position of the selected part in sorted order (0 = front)
   const selectedSortedIdx = sortedParts.findIndex((p) => p.id === selectedPartId);
@@ -133,6 +138,30 @@ export default function PartsSidebar({
           <p className="text-xs font-medium text-zinc-400 truncate" title={selectedPart.name}>
             {selectedPart.name}
           </p>
+
+          <div className="space-y-1">
+            <label htmlFor="part-parent" className="text-xs text-zinc-600">
+              Follows
+            </label>
+            <select
+              id="part-parent"
+              value={selectedPart.parentId ?? ""}
+              onChange={(e) => onPartParentChange(selectedPart.id, e.target.value)}
+              disabled={parentOptions.length === 0}
+              className={`w-full rounded border bg-zinc-950 px-2 py-1 text-xs outline-none transition-colors ${
+                parentOptions.length === 0
+                  ? "cursor-not-allowed border-zinc-800 text-zinc-700"
+                  : "border-zinc-800 text-zinc-300 hover:border-zinc-700 focus:border-violet-500"
+              }`}
+            >
+              <option value="">None</option>
+              {parentOptions.map((part) => (
+                <option key={part.id} value={part.id}>
+                  {part.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {/* Layer order controls */}
           {parts.length > 1 && (

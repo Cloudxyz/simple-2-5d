@@ -41,6 +41,7 @@ export function loadProject(): CharacterRig | null {
     const rig = parsed.rig;
     rig.parts = rig.parts.map((p) => ({
       ...p,
+      parentId: (p as { parentId?: string | null }).parentId ?? null,
       rotation: (p as { rotation?: number }).rotation ?? 0,
       polygonPoints: (p as { polygonPoints?: import("@/types/rig").Point[] | null }).polygonPoints ?? null,
     }));
