@@ -13,10 +13,10 @@ interface ToolbarProps {
 }
 
 const tools: { id: Tool; label: string; icon: string; description: string }[] = [
-  { id: "select", label: "Select", icon: "↖", description: "Select and define a part" },
-  { id: "pen", label: "Pluma", icon: "✏", description: "Define a part by clicking points" },
-  { id: "move", label: "Move", icon: "✥", description: "Drag to pan the canvas" },
-  { id: "point", label: "Movement point", icon: "⊕", description: "Set the pivot for a part" },
+  { id: "select", label: "Select", icon: "↖", description: "Select parts or drag a rectangle region" },
+  { id: "pen", label: "Pen", icon: "✏", description: "Create or edit point-based parts" },
+  { id: "move", label: "Move Canvas", icon: "✥", description: "Pan around the canvas" },
+  { id: "point", label: "Rotation Point", icon: "⊕", description: "Set where the selected part rotates from" },
 ];
 
 export default function Toolbar({
