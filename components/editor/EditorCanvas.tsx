@@ -38,6 +38,16 @@ interface EditorCanvasProps {
   onPenRemoveLastPoint: () => void;
   onPenComplete: (points: Point[]) => void;
   onPenCancel: () => void;
+  onPolygonPointChange: (partId: string, pointIndex: number, nextPoint: Point) => void;
+}
+
+interface LiveVertex {
+  partId: string;
+  idx: number;
+  /** Layer (image-local) position of the circle during drag — used as the circle's x/y prop */
+  stagePos: Point;
+  /** Inverse-rotated polygon coordinate — used to update KonvaLine points live */
+  polygonPos: Point;
 }
 
 function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
@@ -101,6 +111,7 @@ export default function EditorCanvas({
   onPenRemoveLastPoint,
   onPenComplete,
   onPenCancel,
+  onPolygonPointChange,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -114,6 +125,10 @@ export default function EditorCanvas({
   const [dragCurrent, setDragCurrent] = useState<Point | null>(null);
   const [penMousePos, setPenMousePos] = useState<Point | null>(null);
   const [dashOffset, setDashOffset] = useState(0);
+  const [liveVertex, setLiveVertex] = useState<LiveVertex | null>(null);
+
+  // Clear any in-flight vertex drag when the selected part changes
+  useEffect(() => { setLiveVertex(null); }, [selectedPartId]);
 
   useEffect(() => {
     if (!rig.imageDataUrl) { setKonvaImage(null); return; }
@@ -391,7 +406,13 @@ export default function EditorCanvas({
             const strokeWidth = sel ? 2 : 1;
 
             if (part.polygonPoints && part.polygonPoints.length >= 3) {
-              const flatPts = part.polygonPoints.flatMap((p) => [p.x, p.y]);
+              // Substitute the live drag position for the vertex being moved
+              const flatPts = part.polygonPoints.flatMap((p, i) => {
+                if (liveVertex?.partId === part.id && liveVertex.idx === i) {
+                  return [liveVertex.polygonPos.x, liveVertex.polygonPos.y];
+                }
+                return [p.x, p.y];
+              });
               return (
                 <KonvaLine
                   key={part.id}
@@ -461,7 +482,7 @@ export default function EditorCanvas({
             />
           )}
 
-          {/* Vertex markers for the selected polygon part — makes polygon shape unambiguous */}
+          {/* Draggable vertex markers for the selected polygon part */}
           {(() => {
             if (!selectedPartId) return null;
             const part = rig.parts.find((p) => p.id === selectedPartId && p.isVisible);
@@ -475,17 +496,58 @@ export default function EditorCanvas({
                 {part.polygonPoints.map((pt, i) => {
                   const dx = pt.x - mp.x;
                   const dy = pt.y - mp.y;
+                  const defaultX = cos * dx - sin * dy + mp.x;
+                  const defaultY = sin * dx + cos * dy + mp.y;
+                  // During drag, use the live stage position so the prop matches what
+                  // Konva already moved the node to — prevents react-konva snap-back
+                  const isLive = liveVertex?.partId === part.id && liveVertex.idx === i;
+                  const cx = isLive ? liveVertex!.stagePos.x : defaultX;
+                  const cy = isLive ? liveVertex!.stagePos.y : defaultY;
                   return (
                     <KonvaCircle
                       key={`vtx-${part.id}-${i}`}
-                      x={cos * dx - sin * dy + mp.x}
-                      y={sin * dx + cos * dy + mp.y}
-                      radius={3 / sc}
+                      x={cx}
+                      y={cy}
+                      radius={4 / sc}
                       fill="rgba(167,139,250,0.95)"
                       stroke="rgba(255,255,255,0.5)"
                       strokeWidth={1}
                       strokeScaleEnabled={false}
-                      listening={false}
+                      draggable
+                      onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
+                        e.cancelBubble = true;
+                      }}
+                      onDragMove={(e) => {
+                        e.cancelBubble = true;
+                        const sx = e.target.x();
+                        const sy = e.target.y();
+                        // Inverse-rotate dragged layer position → unrotated polygon coords
+                        // Forward: screen = R(pt - mp) + mp
+                        // Inverse: pt = R^T(screen - mp) + mp  (R^T = [cos,sin;-sin,cos])
+                        const rdx = sx - mp.x;
+                        const rdy = sy - mp.y;
+                        setLiveVertex({
+                          partId: part.id,
+                          idx: i,
+                          stagePos: { x: sx, y: sy },
+                          polygonPos: {
+                            x: cos * rdx + sin * rdy + mp.x,
+                            y: -sin * rdx + cos * rdy + mp.y,
+                          },
+                        });
+                      }}
+                      onDragEnd={(e) => {
+                        e.cancelBubble = true;
+                        const sx = e.target.x();
+                        const sy = e.target.y();
+                        const rdx = sx - mp.x;
+                        const rdy = sy - mp.y;
+                        onPolygonPointChange(part.id, i, {
+                          x: Math.round(cos * rdx + sin * rdy + mp.x),
+                          y: Math.round(-sin * rdx + cos * rdy + mp.y),
+                        });
+                        setLiveVertex(null);
+                      }}
                     />
                   );
                 })}

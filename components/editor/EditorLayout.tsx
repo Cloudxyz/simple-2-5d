@@ -164,6 +164,39 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     }));
   }
 
+  function handlePolygonPointChange(
+    partId: string,
+    pointIndex: number,
+    nextPoint: { x: number; y: number }
+  ) {
+    setRig((prev) => ({
+      ...prev,
+      parts: prev.parts.map((p) => {
+        if (p.id !== partId || !p.polygonPoints) return p;
+        const updated = p.polygonPoints.map((pt, i) =>
+          i === pointIndex
+            ? { x: Math.round(nextPoint.x), y: Math.round(nextPoint.y) }
+            : pt
+        );
+        const xs = updated.map((pt) => pt.x);
+        const ys = updated.map((pt) => pt.y);
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
+        return {
+          ...p,
+          polygonPoints: updated,
+          bounds: {
+            x: Math.round(minX),
+            y: Math.round(minY),
+            width: Math.round(Math.max(...xs) - minX),
+            height: Math.round(Math.max(...ys) - minY),
+          },
+          // movementPoint preserved intentionally — user placed it manually
+        };
+      }),
+    }));
+  }
+
   function handleMovementPointChange(partId: string, point: { x: number; y: number }) {
     setRig((prev) => ({
       ...prev,
@@ -379,6 +412,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             onPenRemoveLastPoint={handlePenRemoveLastPoint}
             onPenComplete={handlePenComplete}
             onPenCancel={handlePenCancel}
+            onPolygonPointChange={handlePolygonPointChange}
           />
         </div>
 
