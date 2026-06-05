@@ -141,9 +141,12 @@ export default function EditorCanvas({
   const [dashOffset, setDashOffset] = useState(0);
   const [liveVertex, setLiveVertex] = useState<LiveVertex | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<HoveredEdge | null>(null);
+  const [vertexHovered, setVertexHovered] = useState(false);
 
   // Clear transient interaction state when the selected part changes
   useEffect(() => { setLiveVertex(null); setHoveredEdge(null); }, [selectedPartId]);
+  // Clear vertex cursor override when switching tools
+  useEffect(() => { setVertexHovered(false); setHoveredEdge(null); }, [activeTool]);
 
   useEffect(() => {
     if (!rig.imageDataUrl) { setKonvaImage(null); return; }
@@ -256,12 +259,6 @@ export default function EditorCanvas({
     }
 
     if (activeTool === "select" && isLeft) {
-      // Insert a new polygon vertex when hovering an edge
-      if (hoveredEdge) {
-        onPolygonPointInsert(hoveredEdge.partId, hoveredEdge.edgeIndex, hoveredEdge.insertPoint);
-        setHoveredEdge(null);
-        return;
-      }
       const stage = stageRef.current;
       if (!stage) return;
       const pos = stage.getPointerPosition();
@@ -271,21 +268,30 @@ export default function EditorCanvas({
       setDragCurrent(imgPos);
     }
 
-    if (activeTool === "pen" && isLeft && !penClosed) {
-      const stage = stageRef.current;
-      if (!stage) return;
-      const pos = stage.getPointerPosition();
-      if (!pos) return;
-      const imgPos = toImageCoords(pos.x, pos.y);
-      if (penPoints.length >= 3) {
-        const first = penPoints[0];
-        const snapDist = 12 / stageTransform.scale;
-        if (Math.hypot(imgPos.x - first.x, imgPos.y - first.y) < snapDist) {
-          onPenComplete(penPoints);
-          return;
-        }
+    if (activeTool === "pen" && isLeft) {
+      // Insert a new vertex on an existing polygon edge when hovering one
+      // (only when not currently drawing a new polygon)
+      if (hoveredEdge && penPoints.length === 0) {
+        onPolygonPointInsert(hoveredEdge.partId, hoveredEdge.edgeIndex, hoveredEdge.insertPoint);
+        setHoveredEdge(null);
+        return;
       }
-      onPenAddPoint(imgPos);
+      if (!penClosed) {
+        const stage = stageRef.current;
+        if (!stage) return;
+        const pos = stage.getPointerPosition();
+        if (!pos) return;
+        const imgPos = toImageCoords(pos.x, pos.y);
+        if (penPoints.length >= 3) {
+          const first = penPoints[0];
+          const snapDist = 12 / stageTransform.scale;
+          if (Math.hypot(imgPos.x - first.x, imgPos.y - first.y) < snapDist) {
+            onPenComplete(penPoints);
+            return;
+          }
+        }
+        onPenAddPoint(imgPos);
+      }
     }
   }
 
@@ -307,14 +313,12 @@ export default function EditorCanvas({
     }
 
     if (activeTool === "pen" && !penClosed) {
-      const stage = stageRef.current;
-      if (!stage) return;
-      const pos = stage.getPointerPosition();
+      const pos = stageRef.current?.getPointerPosition();
       if (pos) setPenMousePos(toImageCoords(pos.x, pos.y));
     }
 
-    // Edge hover for polygon point insertion — only when select tool, no active vertex drag or rect drag
-    if (activeTool === "select" && !liveVertex && !dragStart) {
+    // Edge hover for polygon point insertion — pen tool only, not while drawing a new polygon
+    if (activeTool === "pen" && !liveVertex && penPoints.length === 0) {
       const selPart = selectedPartId
         ? rig.parts.find((p) => p.id === selectedPartId && p.isVisible)
         : null;
@@ -433,6 +437,7 @@ export default function EditorCanvas({
   } : null;
 
   const cursor = isPanning ? "grabbing"
+    : (activeTool === "pen" && vertexHovered) ? "grab"
     : hoveredEdge ? "copy"
     : activeTool === "move" ? "grab"
     : activeTool === "select" ? "crosshair"
@@ -632,11 +637,16 @@ export default function EditorCanvas({
                       stroke="rgba(255,255,255,0.5)"
                       strokeWidth={1}
                       strokeScaleEnabled={false}
-                      draggable
+                      draggable={activeTool === "pen"}
+                      onMouseEnter={() => { if (activeTool === "pen") setVertexHovered(true); }}
+                      onMouseLeave={() => setVertexHovered(false)}
                       onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
-                        e.cancelBubble = true;
+                        // Only block bubbling in pen mode so select-tool clicks
+                        // still propagate to the polygon shape and select it
+                        if (activeTool === "pen") e.cancelBubble = true;
                       }}
                       onDragMove={(e) => {
+                        if (activeTool !== "pen") return;
                         e.cancelBubble = true;
                         const sx = e.target.x();
                         const sy = e.target.y();
@@ -656,6 +666,7 @@ export default function EditorCanvas({
                         });
                       }}
                       onDragEnd={(e) => {
+                        if (activeTool !== "pen") return;
                         e.cancelBubble = true;
                         const sx = e.target.x();
                         const sy = e.target.y();
