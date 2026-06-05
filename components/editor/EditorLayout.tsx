@@ -723,7 +723,22 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           },
         };
       }),
-    }, "Reset rotation point");
+    }, "Centered rotation point");
+  }
+
+  function handleMovePointToParent(partId: string) {
+    const part = rig.parts.find((p) => p.id === partId);
+    if (!part || !part.parentId) return;
+    if (isPartEffectivelyLocked(part, rig.groups)) return;
+    const parent = rig.parts.find((p) => p.id === part.parentId);
+    if (!parent) return;
+    if (!isPartEffectivelyVisible(parent, rig.groups)) return;
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) =>
+        p.id === partId ? { ...p, movementPoint: { ...parent.movementPoint } } : p
+      ),
+    }, "Moved rotation point");
   }
 
   function handleRotateLeft(partId: string) {
@@ -996,6 +1011,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onToggleLock={handleToggleLock}
           onToggleVisibility={handleToggleVisibility}
           onResetMovementPoint={handleResetMovementPoint}
+          onMovePointToParent={handleMovePointToParent}
           onMoveToFront={handleMovePartToFront}
           onMoveUp={handleMovePartUp}
           onMoveDown={handleMovePartDown}

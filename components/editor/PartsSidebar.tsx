@@ -39,6 +39,7 @@ interface PartsSidebarProps {
   onToggleLock: (id: string) => void;
   onToggleVisibility: (id: string) => void;
   onResetMovementPoint: (id: string) => void;
+  onMovePointToParent: (id: string) => void;
   onMoveToFront: (id: string) => void;
   onMoveUp: (id: string) => void;
   onMoveDown: (id: string) => void;
@@ -110,6 +111,7 @@ export default function PartsSidebar({
   onToggleLock,
   onToggleVisibility,
   onResetMovementPoint,
+  onMovePointToParent,
   onMoveToFront,
   onMoveUp,
   onMoveDown,
@@ -795,20 +797,41 @@ export default function PartsSidebar({
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-zinc-600 flex items-center gap-1">
               <span className="text-amber-500/70">⊕</span>
-              Movement point set
+              Rotation Point
             </span>
-            <button
-              onClick={() => onResetMovementPoint(selectedPart.id)}
-              disabled={selectedPartEffectiveLocked}
-              title="Reset movement point to center"
-              className={`text-xs transition-colors whitespace-nowrap ${
-                selectedPartEffectiveLocked
-                  ? "text-zinc-700 cursor-not-allowed"
-                  : "text-zinc-500 hover:text-zinc-200"
-              }`}
-            >
-              Reset point
-            </button>
+            <div className="flex items-center gap-2">
+              {selectedPart.parentId && (() => {
+                const parentPart = parts.find((p) => p.id === selectedPart.parentId);
+                const parentVisible = isPartEffectivelyVisible(parentPart ?? null, groups);
+                const disabled = selectedPartEffectiveLocked || !parentPart || !parentVisible;
+                return (
+                  <button
+                    onClick={() => onMovePointToParent(selectedPart.id)}
+                    disabled={disabled}
+                    title="Move rotation point to parent's rotation point"
+                    className={`text-xs transition-colors whitespace-nowrap ${
+                      disabled
+                        ? "text-zinc-700 cursor-not-allowed"
+                        : "text-zinc-500 hover:text-zinc-200"
+                    }`}
+                  >
+                    Move to parent
+                  </button>
+                );
+              })()}
+              <button
+                onClick={() => onResetMovementPoint(selectedPart.id)}
+                disabled={selectedPartEffectiveLocked}
+                title="Center rotation point on bounds"
+                className={`text-xs transition-colors whitespace-nowrap ${
+                  selectedPartEffectiveLocked
+                    ? "text-zinc-700 cursor-not-allowed"
+                    : "text-zinc-500 hover:text-zinc-200"
+                }`}
+              >
+                Center point
+              </button>
+            </div>
           </div>
         </div>
       )}
