@@ -461,6 +461,38 @@ export default function EditorCanvas({
             />
           )}
 
+          {/* Vertex markers for the selected polygon part — makes polygon shape unambiguous */}
+          {(() => {
+            if (!selectedPartId) return null;
+            const part = rig.parts.find((p) => p.id === selectedPartId && p.isVisible);
+            if (!part?.polygonPoints || part.polygonPoints.length < 3) return null;
+            const mp = part.movementPoint;
+            const rad = (part.rotation * Math.PI) / 180;
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+            return (
+              <>
+                {part.polygonPoints.map((pt, i) => {
+                  const dx = pt.x - mp.x;
+                  const dy = pt.y - mp.y;
+                  return (
+                    <KonvaCircle
+                      key={`vtx-${part.id}-${i}`}
+                      x={cos * dx - sin * dy + mp.x}
+                      y={sin * dx + cos * dy + mp.y}
+                      radius={3 / sc}
+                      fill="rgba(167,139,250,0.95)"
+                      stroke="rgba(255,255,255,0.5)"
+                      strokeWidth={1}
+                      strokeScaleEnabled={false}
+                      listening={false}
+                    />
+                  );
+                })}
+              </>
+            );
+          })()}
+
           {/* Pen tool polygon overlay */}
           {activeTool === "pen" && penPoints.length > 0 && (() => {
             const flatPoints = penPoints.flatMap((p) => [p.x, p.y]);

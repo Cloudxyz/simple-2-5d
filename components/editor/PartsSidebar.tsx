@@ -71,7 +71,7 @@ export default function PartsSidebar({
       <div className="flex-1 overflow-y-auto">
         {sortedParts.length === 0 ? (
           <p className="px-3 py-4 text-zinc-600 text-xs leading-relaxed">
-            No parts yet. Choose the Select tool, then drag a rectangle over any body part.
+            No parts yet. Use Select to drag a region, or Pluma to click points around a shape.
           </p>
         ) : (
           <ul className="py-1">
