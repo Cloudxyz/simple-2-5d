@@ -4,7 +4,8 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { Stage, Layer, Image as KonvaImage, Rect as KonvaRect, Circle as KonvaCircle, Line as KonvaLine } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as StageType } from "konva/lib/Stage";
-import type { BoundingBox, CharacterRig, Part, Point } from "@/types/rig";
+import { isPartEffectivelyLocked } from "@/lib/layers";
+import type { BoundingBox, CharacterRig, LayerGroup, Part, Point } from "@/types/rig";
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
@@ -64,10 +65,6 @@ interface LiveVertex {
   polygonPos: Point;
 }
 
-function isPartLocked(part: Part | null | undefined): boolean {
-  return part?.isLocked === true;
-}
-
 function inverseRotatePoint(point: Point, pivot: Point, rotation: number): Point {
   const rad = (rotation * Math.PI) / 180;
   const cos = Math.cos(rad);
@@ -125,13 +122,15 @@ function isPointInPart(point: Point, part: Part): boolean {
   );
 }
 
-function findTopmostVisiblePartAtPoint(parts: Part[], point: Point): Part | null {
+function findTopmostVisiblePartAtPoint(parts: Part[], groups: LayerGroup[] | undefined, point: Point): Part | null {
   const visibleParts = [...parts]
-    .filter((part) => part.isVisible && !isPartLocked(part))
+    .filter((part) => part.isVisible)
     .sort((a, b) => b.zIndex - a.zIndex);
 
   for (const part of visibleParts) {
-    if (isPointInPart(point, part)) return part;
+    if (!isPartEffectivelyLocked(part, groups)) {
+      if (isPointInPart(point, part)) return part;
+    }
   }
 
   return null;
@@ -227,13 +226,13 @@ export default function EditorCanvas({
     const selectedPart = selectedPartId
       ? rig.parts.find((part) => part.id === selectedPartId)
       : null;
-    if (isPartLocked(selectedPart)) {
+    if (isPartEffectivelyLocked(selectedPart, rig.groups)) {
       setLiveVertex(null);
       setHoveredEdge(null);
       setSelectedPolygonPointIdx(null);
       setVertexHovered(false);
     }
-  }, [rig.parts, selectedPartId]);
+  }, [rig.groups, rig.parts, selectedPartId]);
 
   useEffect(() => {
     if (!rig.imageDataUrl) { setKonvaImage(null); return; }
@@ -297,7 +296,7 @@ export default function EditorCanvas({
           }
       } else if (selectedPolygonPointIdx !== null && selectedPartId) {
         const selectedPart = rig.parts.find((p) => p.id === selectedPartId);
-        if (isPartLocked(selectedPart)) return;
+        if (isPartEffectivelyLocked(selectedPart, rig.groups)) return;
         // Existing polygon vertex selected: delete it
         e.preventDefault();
         onPolygonPointDelete(selectedPartId, selectedPolygonPointIdx);
@@ -307,7 +306,7 @@ export default function EditorCanvas({
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeTool, penClosed, penPoints, rig.parts, selectedPolygonPointIdx, selectedPartId,
+  }, [activeTool, penClosed, penPoints, rig.groups, rig.parts, selectedPolygonPointIdx, selectedPartId,
       onPenComplete, onPenCancel, onPenRemoveLastPoint, onPolygonPointDelete]);
 
   function loadFile(file: File) {
@@ -422,7 +421,7 @@ export default function EditorCanvas({
       const selPart = selectedPartId
         ? rig.parts.find((p) => p.id === selectedPartId && p.isVisible)
         : null;
-      if (isPartLocked(selPart)) {
+      if (isPartEffectivelyLocked(selPart, rig.groups)) {
         if (hoveredEdge) setHoveredEdge(null);
         return;
       }
@@ -516,7 +515,7 @@ export default function EditorCanvas({
           height: Math.round(Math.min(dy, ih - clampedY)),
         });
       } else {
-        const hitPart = findTopmostVisiblePartAtPoint(rig.parts, dragCurrent);
+        const hitPart = findTopmostVisiblePartAtPoint(rig.parts, rig.groups, dragCurrent);
         onSelectPart(hitPart?.id ?? null);
       }
 
@@ -701,7 +700,7 @@ export default function EditorCanvas({
           {(() => {
             if (!selectedPartId) return null;
             const part = rig.parts.find((p) => p.id === selectedPartId && p.isVisible);
-            if (!part?.polygonPoints || part.polygonPoints.length < 3 || isPartLocked(part)) return null;
+            if (!part?.polygonPoints || part.polygonPoints.length < 3 || isPartEffectivelyLocked(part, rig.groups)) return null;
             const mp = part.movementPoint;
             const rad = (part.rotation * Math.PI) / 180;
             const cos = Math.cos(rad);
@@ -729,22 +728,22 @@ export default function EditorCanvas({
                       stroke={isSelected ? "rgba(167,139,250,1)" : "rgba(255,255,255,0.5)"}
                       strokeWidth={isSelected ? 2 : 1}
                       strokeScaleEnabled={false}
-                      draggable={activeTool === "pen" && !isPartLocked(part)}
-                      onMouseEnter={() => { if (activeTool === "pen" && !isPartLocked(part)) setVertexHovered(true); }}
+                      draggable={activeTool === "pen" && !isPartEffectivelyLocked(part, rig.groups)}
+                      onMouseEnter={() => { if (activeTool === "pen" && !isPartEffectivelyLocked(part, rig.groups)) setVertexHovered(true); }}
                       onMouseLeave={() => setVertexHovered(false)}
                       onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
                         // Only block bubbling in pen mode so select-tool clicks
                         // still propagate to the polygon shape and select it
-                        if (activeTool === "pen" && !isPartLocked(part)) e.cancelBubble = true;
+                        if (activeTool === "pen" && !isPartEffectivelyLocked(part, rig.groups)) e.cancelBubble = true;
                       }}
                       onClick={(e: KonvaEventObject<MouseEvent>) => {
-                        if (activeTool !== "pen" || isPartLocked(part)) return;
+                        if (activeTool !== "pen" || isPartEffectivelyLocked(part, rig.groups)) return;
                         e.cancelBubble = true;
                         // Toggle: clicking the already-selected vertex deselects it
                         setSelectedPolygonPointIdx(selectedPolygonPointIdx === i ? null : i);
                       }}
                       onDragMove={(e) => {
-                        if (activeTool !== "pen" || isPartLocked(part)) return;
+                        if (activeTool !== "pen" || isPartEffectivelyLocked(part, rig.groups)) return;
                         e.cancelBubble = true;
                         const sx = e.target.x();
                         const sy = e.target.y();
@@ -764,7 +763,7 @@ export default function EditorCanvas({
                         });
                       }}
                       onDragEnd={(e) => {
-                        if (activeTool !== "pen" || isPartLocked(part)) return;
+                        if (activeTool !== "pen" || isPartEffectivelyLocked(part, rig.groups)) return;
                         e.cancelBubble = true;
                         const sx = e.target.x();
                         const sy = e.target.y();
@@ -890,7 +889,7 @@ export default function EditorCanvas({
                   stroke={color}
                   strokeWidth={1.5}
                   strokeScaleEnabled={false}
-                  draggable={isPointTool && !isPartLocked(selectedPart)}
+                  draggable={isPointTool && !isPartEffectivelyLocked(selectedPart, rig.groups)}
                   onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
                     // Always stop bubbling so pan/selection don't fire
                     e.cancelBubble = true;

@@ -20,6 +20,7 @@ export interface Part {
   /** Depth layer: higher number = in front */
   zIndex: number;
   parentId: string | null;
+  groupId?: string | null;
   /** Extracted PNG data URL for this part (set on export) */
   imageDataUrl: string | null;
   isVisible: boolean;
@@ -31,10 +32,18 @@ export interface Part {
   polygonPoints?: Point[] | null;
 }
 
+export interface LayerGroup {
+  id: string;
+  name: string;
+  isLocked: boolean;
+  isExpanded: boolean;
+}
+
 export interface CharacterRig {
   name: string;
   imageDataUrl: string | null;
   parts: Part[];
+  groups?: LayerGroup[];
 }
 
 export interface RigExport {

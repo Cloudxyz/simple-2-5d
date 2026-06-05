@@ -16,7 +16,7 @@ export type SaveResult = "ok" | "empty" | "error";
  * (most likely QuotaExceededError — image data URLs can be several MB).
  */
 export function saveProject(rig: CharacterRig): SaveResult {
-  if (!rig.imageDataUrl && rig.parts.length === 0) return "empty";
+  if (!rig.imageDataUrl && rig.parts.length === 0 && (rig.groups?.length ?? 0) === 0) return "empty";
   try {
     const payload: SavedProject = {
       version: 1,
@@ -39,9 +39,15 @@ export function loadProject(): CharacterRig | null {
     if (parsed.version !== 1 || !parsed.rig) return null;
     // Migrate old saves that predate the rotation / polygonPoints fields
     const rig = parsed.rig;
+    rig.groups = (rig.groups ?? []).map((group) => ({
+      ...group,
+      isLocked: group.isLocked ?? false,
+      isExpanded: group.isExpanded ?? true,
+    }));
     rig.parts = rig.parts.map((p) => ({
       ...p,
       parentId: (p as { parentId?: string | null }).parentId ?? null,
+      groupId: (p as { groupId?: string | null }).groupId ?? null,
       isLocked: (p as { isLocked?: boolean }).isLocked ?? false,
       rotation: (p as { rotation?: number }).rotation ?? 0,
       polygonPoints: (p as { polygonPoints?: import("@/types/rig").Point[] | null }).polygonPoints ?? null,

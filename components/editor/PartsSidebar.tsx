@@ -1,12 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Part } from "@/types/rig";
+import { findGroupById, isPartDirectlyLocked, isPartEffectivelyLocked } from "@/lib/layers";
+import type { LayerGroup, Part } from "@/types/rig";
 
 interface PartsSidebarProps {
   parts: Part[];
+  groups: LayerGroup[];
   selectedPartId: string | null;
   onSelectPart: (id: string | null) => void;
+  onCreateGroup: () => void;
+  onRenameGroup: (groupId: string, name: string) => void;
+  onDeleteGroup: (groupId: string) => void;
+  onToggleGroupLock: (groupId: string) => void;
+  onToggleGroupExpanded: (groupId: string) => void;
+  onPartGroupChange: (partId: string, groupId: string) => void;
   onPartParentChange: (partId: string, parentId: string) => void;
   onPartReorderByDrag: (sourcePartId: string, targetPartId: string, placeAfter: boolean) => void;
   onDeletePart: (id: string) => void;
@@ -20,10 +28,6 @@ interface PartsSidebarProps {
   onRotateLeft: (id: string) => void;
   onRotateRight: (id: string) => void;
   onResetRotation: (id: string) => void;
-}
-
-function isPartLocked(part: Part | null | undefined): boolean {
-  return part?.isLocked === true;
 }
 
 function getPartDepth(part: Part, partsById: Map<string, Part>): number {
@@ -64,8 +68,15 @@ function EyeClosedIcon() {
 
 export default function PartsSidebar({
   parts,
+  groups,
   selectedPartId,
   onSelectPart,
+  onCreateGroup,
+  onRenameGroup,
+  onDeleteGroup,
+  onToggleGroupLock,
+  onToggleGroupExpanded,
+  onPartGroupChange,
   onPartParentChange,
   onPartReorderByDrag,
   onDeletePart,
@@ -83,165 +94,283 @@ export default function PartsSidebar({
   const [draggingPartId, setDraggingPartId] = useState<string | null>(null);
   const [dragOverPartId, setDragOverPartId] = useState<string | null>(null);
   const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingGroupName, setEditingGroupName] = useState("");
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const partsById = new Map(parts.map((part) => [part.id, part]));
+  const groupsById = new Map(groups.map((group) => [group.id, group]));
   const sortedParts = [...parts]
     .sort((a, b) => b.zIndex - a.zIndex)
     .map((part) => ({
       part,
       parent: part.parentId ? partsById.get(part.parentId) ?? null : null,
       depth: getPartDepth(part, partsById),
+      group: findGroupById(groups, part.groupId),
     }));
 
-  const selectedPart = parts.find((p) => p.id === selectedPartId) ?? null;
+  const selectedPart = parts.find((part) => part.id === selectedPartId) ?? null;
+  const selectedPartEffectiveLocked = isPartEffectivelyLocked(selectedPart, groups);
+  const selectedPartGroup = findGroupById(groups, selectedPart?.groupId);
   const parentOptions = selectedPart
     ? sortedParts.map(({ part }) => part).filter((part) => part.id !== selectedPart.id)
     : [];
-
   const selectedSortedIdx = sortedParts.findIndex(({ part }) => part.id === selectedPartId);
   const isAtFront = selectedSortedIdx === 0;
   const isAtBack = selectedSortedIdx === sortedParts.length - 1;
 
   useEffect(() => {
     if (!selectedPartId) return;
-    rowRefs.current[selectedPartId]?.scrollIntoView({
-      block: "nearest",
-    });
+    rowRefs.current[selectedPartId]?.scrollIntoView({ block: "nearest" });
   }, [selectedPartId]);
+
+  useEffect(() => {
+    if (editingGroupId && !groups.some((group) => group.id === editingGroupId)) {
+      setEditingGroupId(null);
+      setEditingGroupName("");
+    }
+  }, [editingGroupId, groups]);
+
+  const groupedParts = new Map<string, typeof sortedParts>();
+  for (const item of sortedParts) {
+    if (!item.part.groupId || !groupsById.has(item.part.groupId)) continue;
+    if (!groupedParts.has(item.part.groupId)) groupedParts.set(item.part.groupId, []);
+    groupedParts.get(item.part.groupId)!.push(item);
+  }
+  const ungroupedParts = sortedParts.filter(({ part }) => !part.groupId || !groupsById.has(part.groupId));
+
+  function startGroupRename(group: LayerGroup) {
+    setEditingGroupId(group.id);
+    setEditingGroupName(group.name);
+  }
+
+  function commitGroupRename() {
+    if (!editingGroupId) return;
+    onRenameGroup(editingGroupId, editingGroupName);
+    setEditingGroupId(null);
+    setEditingGroupName("");
+  }
+
+  function renderPartRow(item: (typeof sortedParts)[number], baseIndent: number) {
+    const { part, parent, depth } = item;
+    const isSelected = part.id === selectedPartId;
+    const isDirectlyLocked = isPartDirectlyLocked(part);
+    const isEffectivelyLocked = isPartEffectivelyLocked(part, groups);
+    const isDragging = draggingPartId === part.id;
+    const isDragTarget = dragOverPartId === part.id && draggingPartId !== part.id;
+    const indentPx = baseIndent + Math.min(depth, 4) * 12;
+
+    return (
+      <li key={part.id}>
+        <div
+          ref={(node) => {
+            rowRefs.current[part.id] = node;
+          }}
+          draggable
+          onDragStart={(e) => {
+            setDraggingPartId(part.id);
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", part.id);
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (draggingPartId !== part.id) {
+              e.dataTransfer.dropEffect = "move";
+              setDragOverPartId(part.id);
+              const bounds = e.currentTarget.getBoundingClientRect();
+              const halfwayY = bounds.top + bounds.height / 2;
+              setDragOverPosition(e.clientY < halfwayY ? "before" : "after");
+            }
+          }}
+          onDragLeave={() => {
+            if (dragOverPartId === part.id) {
+              setDragOverPartId(null);
+              setDragOverPosition(null);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            const sourcePartId = draggingPartId ?? e.dataTransfer.getData("text/plain");
+            if (sourcePartId && sourcePartId !== part.id) {
+              onPartReorderByDrag(sourcePartId, part.id, dragOverPosition === "after");
+            }
+            setDraggingPartId(null);
+            setDragOverPartId(null);
+            setDragOverPosition(null);
+          }}
+          onDragEnd={() => {
+            setDraggingPartId(null);
+            setDragOverPartId(null);
+            setDragOverPosition(null);
+          }}
+          className={`flex items-center gap-1 px-2 py-1.5 group cursor-grab border-l-2 ${
+            isSelected
+              ? "bg-violet-900/60 border-violet-400 shadow-[inset_0_0_0_1px_rgba(167,139,250,0.28)]"
+              : "border-transparent hover:bg-zinc-800"
+          } ${isDragging ? "opacity-60" : ""} ${
+            isDragTarget
+              ? dragOverPosition === "after"
+                ? "bg-zinc-800 ring-1 ring-inset ring-violet-500/70 border-b border-violet-500/70"
+                : "bg-zinc-800 ring-1 ring-inset ring-violet-500/70 border-t border-violet-500/70"
+              : ""
+          }`}
+        >
+          <div className="flex-1 min-w-0" style={{ paddingLeft: `${indentPx}px` }}>
+            <button
+              onClick={() => onSelectPart(isSelected ? null : part.id)}
+              aria-current={isSelected ? "true" : undefined}
+              className={`w-full text-left transition-colors ${
+                !part.isVisible ? "opacity-40" : ""
+              }`}
+              title={part.name}
+            >
+              <span
+                className={`block truncate text-sm ${
+                  isSelected ? "text-violet-200" : "text-zinc-300"
+                }`}
+              >
+                {depth > 0 ? "↳ " : ""}{part.name}
+              </span>
+              {parent && (
+                <span className="block truncate text-[10px] text-zinc-500">
+                  follows {parent.name}
+                </span>
+              )}
+            </button>
+          </div>
+
+          <button
+            onClick={() => onToggleLock(part.id)}
+            title={isDirectlyLocked ? "Unlock part" : "Lock part"}
+            className={`flex-shrink-0 rounded px-1 text-xs transition-colors ${
+              isDirectlyLocked
+                ? "text-amber-300 hover:bg-zinc-800"
+                : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+            }`}
+          >
+            {isDirectlyLocked ? "🔒" : "🔓"}
+          </button>
+
+          <button
+            onClick={() => onToggleVisibility(part.id)}
+            title={part.isVisible ? "Hide" : "Show"}
+            className={`flex-shrink-0 p-1 rounded transition-colors ${
+              part.isVisible
+                ? "text-zinc-500 hover:text-zinc-200"
+                : "text-zinc-700 hover:text-zinc-400"
+            }`}
+          >
+            {part.isVisible ? <EyeOpenIcon /> : <EyeClosedIcon />}
+          </button>
+
+          <button
+            onClick={() => onDeletePart(part.id)}
+            disabled={isEffectivelyLocked}
+            title={isEffectivelyLocked ? "Unlock part or folder to delete" : "Delete part"}
+            className={`flex-shrink-0 p-1 rounded transition-colors ${
+              isEffectivelyLocked
+                ? "text-zinc-800 cursor-not-allowed opacity-40"
+                : "text-zinc-700 hover:text-red-400 opacity-0 group-hover:opacity-100"
+            }`}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      </li>
+    );
+  }
 
   return (
     <aside className="w-56 bg-zinc-900 border-l border-zinc-800 flex flex-col flex-shrink-0">
-      <div className="px-3 py-2 border-b border-zinc-800">
+      <div className="px-3 py-2 border-b border-zinc-800 flex items-center justify-between gap-2">
         <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Layers</h2>
+        <button
+          onClick={onCreateGroup}
+          className="text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors"
+        >
+          New folder
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {sortedParts.length === 0 ? (
+        {sortedParts.length === 0 && groups.length === 0 ? (
           <p className="px-3 py-4 text-zinc-600 text-xs leading-relaxed">
             No parts yet. Use Select to drag a region, or Pluma to click points around a shape.
           </p>
         ) : (
-          <ul className="py-1">
-            {sortedParts.map(({ part, parent, depth }) => {
-              const isSelected = part.id === selectedPartId;
-              const isLocked = isPartLocked(part);
-              const isDragging = draggingPartId === part.id;
-              const isDragTarget = dragOverPartId === part.id && draggingPartId !== part.id;
-              const indentPx = Math.min(depth, 4) * 12;
-
+          <div className="py-1">
+            {groups.map((group) => {
+              const groupParts = groupedParts.get(group.id) ?? [];
+              const isEditing = editingGroupId === group.id;
               return (
-                <li key={part.id}>
-                  <div
-                    ref={(node) => {
-                      rowRefs.current[part.id] = node;
-                    }}
-                    draggable
-                    onDragStart={(e) => {
-                      setDraggingPartId(part.id);
-                      e.dataTransfer.effectAllowed = "move";
-                      e.dataTransfer.setData("text/plain", part.id);
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      if (draggingPartId !== part.id) {
-                        e.dataTransfer.dropEffect = "move";
-                        setDragOverPartId(part.id);
-                        const bounds = e.currentTarget.getBoundingClientRect();
-                        const halfwayY = bounds.top + bounds.height / 2;
-                        setDragOverPosition(e.clientY < halfwayY ? "before" : "after");
-                      }
-                    }}
-                    onDragLeave={() => {
-                      if (dragOverPartId === part.id) {
-                        setDragOverPartId(null);
-                        setDragOverPosition(null);
-                      }
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      const sourcePartId = draggingPartId ?? e.dataTransfer.getData("text/plain");
-                      if (sourcePartId && sourcePartId !== part.id) {
-                        onPartReorderByDrag(sourcePartId, part.id, dragOverPosition === "after");
-                      }
-                      setDraggingPartId(null);
-                      setDragOverPartId(null);
-                      setDragOverPosition(null);
-                    }}
-                    onDragEnd={() => {
-                      setDraggingPartId(null);
-                      setDragOverPartId(null);
-                      setDragOverPosition(null);
-                    }}
-                    className={`flex items-center gap-1 px-2 py-1.5 group cursor-grab border-l-2 ${
-                      isSelected
-                        ? "bg-violet-900/60 border-violet-400 shadow-[inset_0_0_0_1px_rgba(167,139,250,0.28)]"
-                        : "border-transparent hover:bg-zinc-800"
-                    } ${isDragging ? "opacity-60" : ""} ${
-                      isDragTarget
-                        ? dragOverPosition === "after"
-                          ? "bg-zinc-800 ring-1 ring-inset ring-violet-500/70 border-b border-violet-500/70"
-                          : "bg-zinc-800 ring-1 ring-inset ring-violet-500/70 border-t border-violet-500/70"
-                        : ""
-                    }`}
-                  >
-                    <div className="flex-1 min-w-0" style={{ paddingLeft: `${indentPx}px` }}>
+                <div key={group.id} className="mb-1">
+                  <div className="flex items-center gap-1 px-2 py-1.5 hover:bg-zinc-800/80 border-l-2 border-transparent">
+                    <button
+                      onClick={() => onToggleGroupExpanded(group.id)}
+                      title={group.isExpanded ? "Collapse folder" : "Expand folder"}
+                      className="w-4 text-xs text-zinc-500 hover:text-zinc-200 transition-colors"
+                    >
+                      {group.isExpanded ? "▾" : "▸"}
+                    </button>
+
+                    {isEditing ? (
+                      <input
+                        autoFocus
+                        value={editingGroupName}
+                        onChange={(e) => setEditingGroupName(e.target.value)}
+                        onBlur={commitGroupRename}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitGroupRename();
+                          if (e.key === "Escape") {
+                            setEditingGroupId(null);
+                            setEditingGroupName("");
+                          }
+                        }}
+                        className="flex-1 min-w-0 rounded bg-zinc-950 border border-zinc-700 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-violet-500"
+                      />
+                    ) : (
                       <button
-                        onClick={() => onSelectPart(isSelected ? null : part.id)}
-                        aria-current={isSelected ? "true" : undefined}
-                        className={`w-full text-left transition-colors ${
-                          !part.isVisible ? "opacity-40" : ""
-                        }`}
-                        title={part.name}
+                        onDoubleClick={() => startGroupRename(group)}
+                        onClick={() => onToggleGroupExpanded(group.id)}
+                        className="flex-1 min-w-0 text-left"
+                        title={group.name}
                       >
-                        <span
-                          className={`block truncate text-sm ${
-                            isSelected ? "text-violet-200" : "text-zinc-300"
-                          }`}
-                        >
-                          {depth > 0 ? "↳ " : ""}{part.name}
+                        <span className="block truncate text-sm text-zinc-200">📁 {group.name}</span>
+                        <span className="block truncate text-[10px] text-zinc-500">
+                          {groupParts.length} {groupParts.length === 1 ? "part" : "parts"}
                         </span>
-                        {parent && (
-                          <span className="block truncate text-[10px] text-zinc-500">
-                            follows {parent.name}
-                          </span>
-                        )}
                       </button>
-                    </div>
+                    )}
+
+                    {!isEditing && (
+                      <button
+                        onClick={() => startGroupRename(group)}
+                        title="Rename folder"
+                        className="flex-shrink-0 rounded px-1 text-xs text-zinc-500 hover:bg-zinc-700 hover:text-zinc-200 transition-colors"
+                      >
+                        ✎
+                      </button>
+                    )}
 
                     <button
-                      onClick={() => onToggleLock(part.id)}
-                      title={isLocked ? "Unlock" : "Lock"}
+                      onClick={() => onToggleGroupLock(group.id)}
+                      title={group.isLocked ? "Unlock folder" : "Lock folder"}
                       className={`flex-shrink-0 rounded px-1 text-xs transition-colors ${
-                        isLocked
-                          ? "text-amber-300 hover:bg-zinc-800"
-                          : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                        group.isLocked
+                          ? "text-amber-300 hover:bg-zinc-700"
+                          : "text-zinc-500 hover:bg-zinc-700 hover:text-zinc-200"
                       }`}
                     >
-                      {isLocked ? "🔒" : "🔓"}
+                      {group.isLocked ? "🔒" : "🔓"}
                     </button>
 
                     <button
-                      onClick={() => onToggleVisibility(part.id)}
-                      title={part.isVisible ? "Hide" : "Show"}
-                      className={`flex-shrink-0 p-1 rounded transition-colors ${
-                        part.isVisible
-                          ? "text-zinc-500 hover:text-zinc-200"
-                          : "text-zinc-700 hover:text-zinc-400"
-                      }`}
-                    >
-                      {part.isVisible ? <EyeOpenIcon /> : <EyeClosedIcon />}
-                    </button>
-
-                    <button
-                      onClick={() => onDeletePart(part.id)}
-                      disabled={isLocked}
-                      title={isLocked ? "Unlock to delete" : "Delete part"}
-                      className={`flex-shrink-0 p-1 rounded transition-colors ${
-                        isLocked
-                          ? "text-zinc-800 cursor-not-allowed opacity-40"
-                          : "text-zinc-700 hover:text-red-400 opacity-0 group-hover:opacity-100"
-                      }`}
+                      onClick={() => onDeleteGroup(group.id)}
+                      title="Delete folder"
+                      className="flex-shrink-0 p-1 rounded text-zinc-700 hover:text-red-400 transition-colors"
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                         <line x1="18" y1="6" x2="6" y2="18" />
@@ -249,10 +378,18 @@ export default function PartsSidebar({
                       </svg>
                     </button>
                   </div>
-                </li>
+
+                  {group.isExpanded && groupParts.length > 0 && (
+                    <ul>{groupParts.map((item) => renderPartRow(item, 12))}</ul>
+                  )}
+                </div>
               );
             })}
-          </ul>
+
+            {ungroupedParts.length > 0 && (
+              <ul>{ungroupedParts.map((item) => renderPartRow(item, 0))}</ul>
+            )}
+          </div>
         )}
       </div>
 
@@ -263,6 +400,33 @@ export default function PartsSidebar({
           </p>
 
           <div className="space-y-1">
+            <label htmlFor="part-group" className="text-xs text-zinc-600">
+              Folder
+            </label>
+            <select
+              id="part-group"
+              value={selectedPart.groupId ?? ""}
+              onChange={(e) => onPartGroupChange(selectedPart.id, e.target.value)}
+              disabled={groups.length === 0 || selectedPartEffectiveLocked}
+              className={`w-full rounded border bg-zinc-950 px-2 py-1 text-xs outline-none transition-colors ${
+                groups.length === 0 || selectedPartEffectiveLocked
+                  ? "cursor-not-allowed border-zinc-800 text-zinc-700"
+                  : "border-zinc-800 text-zinc-300 hover:border-zinc-700 focus:border-violet-500"
+              }`}
+            >
+              <option value="">None</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+            {selectedPartGroup?.isLocked && (
+              <p className="text-[10px] text-zinc-500">Folder lock is active</p>
+            )}
+          </div>
+
+          <div className="space-y-1">
             <label htmlFor="part-parent" className="text-xs text-zinc-600">
               Follows
             </label>
@@ -270,9 +434,9 @@ export default function PartsSidebar({
               id="part-parent"
               value={selectedPart.parentId ?? ""}
               onChange={(e) => onPartParentChange(selectedPart.id, e.target.value)}
-              disabled={parentOptions.length === 0 || isPartLocked(selectedPart)}
+              disabled={parentOptions.length === 0 || selectedPartEffectiveLocked}
               className={`w-full rounded border bg-zinc-950 px-2 py-1 text-xs outline-none transition-colors ${
-                parentOptions.length === 0 || isPartLocked(selectedPart)
+                parentOptions.length === 0 || selectedPartEffectiveLocked
                   ? "cursor-not-allowed border-zinc-800 text-zinc-700"
                   : "border-zinc-800 text-zinc-300 hover:border-zinc-700 focus:border-violet-500"
               }`}
@@ -333,21 +497,21 @@ export default function PartsSidebar({
               <div className="flex gap-1">
                 <OrderButton
                   onClick={() => onRotateLeft(selectedPart.id)}
-                  disabled={isPartLocked(selectedPart)}
+                  disabled={selectedPartEffectiveLocked}
                   title="Rotate left"
                 >
                   ↺
                 </OrderButton>
                 <OrderButton
                   onClick={() => onRotateRight(selectedPart.id)}
-                  disabled={isPartLocked(selectedPart)}
+                  disabled={selectedPartEffectiveLocked}
                   title="Rotate right"
                 >
                   ↻
                 </OrderButton>
                 <OrderButton
                   onClick={() => onResetRotation(selectedPart.id)}
-                  disabled={selectedPart.rotation === 0 || isPartLocked(selectedPart)}
+                  disabled={selectedPart.rotation === 0 || selectedPartEffectiveLocked}
                   title="Reset rotation"
                 >
                   0°
@@ -363,10 +527,10 @@ export default function PartsSidebar({
             </span>
             <button
               onClick={() => onResetMovementPoint(selectedPart.id)}
-              disabled={isPartLocked(selectedPart)}
+              disabled={selectedPartEffectiveLocked}
               title="Reset movement point to center"
               className={`text-xs transition-colors whitespace-nowrap ${
-                isPartLocked(selectedPart)
+                selectedPartEffectiveLocked
                   ? "text-zinc-700 cursor-not-allowed"
                   : "text-zinc-500 hover:text-zinc-200"
               }`}

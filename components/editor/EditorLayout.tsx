@@ -7,7 +7,8 @@ import PartsSidebar from "./PartsSidebar";
 import Toolbar from "./Toolbar";
 import NamePartDialog from "./NamePartDialog";
 import { saveProject, loadProject, clearProject } from "@/lib/storage";
-import type { BoundingBox, CharacterRig, Part } from "@/types/rig";
+import { findGroupById, isPartEffectivelyLocked } from "@/lib/layers";
+import type { BoundingBox, CharacterRig, LayerGroup, Part } from "@/types/rig";
 
 interface EditorLayoutProps {
   characterName: string;
@@ -48,15 +49,12 @@ function reindexPartsFromFrontOrder(parts: Part[]): Part[] {
   }));
 }
 
-function isPartLocked(part: Part | undefined): boolean {
-  return part?.isLocked === true;
-}
-
 export default function EditorLayout({ characterName, freshStart = false }: EditorLayoutProps) {
   const [rig, setRig] = useState<CharacterRig>({
     name: characterName,
     parts: [],
     imageDataUrl: null,
+    groups: [],
   });
 
   const [activeTool, setActiveTool] = useState<"select" | "move" | "point" | "pen">("select");
@@ -132,7 +130,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
   function handleConfirmClear() {
     clearProject();
-    setRig({ name: characterName, parts: [], imageDataUrl: null });
+    setRig({ name: characterName, parts: [], imageDataUrl: null, groups: [] });
     setSelectedPartId(null);
     setStageTransform({ x: 0, y: 0, scale: 1 });
     setShowClearConfirm(false);
@@ -155,6 +153,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       },
       zIndex: rig.parts.length,
       parentId: null,
+      groupId: null,
       imageDataUrl: null,
       isVisible: true,
       isLocked: false,
@@ -175,11 +174,24 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   }
 
   function handleSelectPart(id: string | null) {
+    if (!id) {
+      setSelectedPartId(null);
+      return;
+    }
+    const selectedPart = rig.parts.find((part) => part.id === id);
+    if (selectedPart?.groupId) {
+      setRig((prev) => ({
+        ...prev,
+        groups: (prev.groups ?? []).map((group) =>
+          group.id === selectedPart.groupId ? { ...group, isExpanded: true } : group
+        ),
+      }));
+    }
     setSelectedPartId(id);
   }
 
   function handleDeletePart(id: string) {
-    if (isPartLocked(rig.parts.find((p) => p.id === id))) return;
+    if (isPartEffectivelyLocked(rig.parts.find((p) => p.id === id), rig.groups)) return;
     setRig((prev) => ({
       ...prev,
       parts: prev.parts
@@ -203,12 +215,80 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     }));
   }
 
+  function handleCreateGroup() {
+    const newGroup: LayerGroup = {
+      id: crypto.randomUUID(),
+      name: `Folder ${((rig.groups ?? []).length + 1)}`,
+      isLocked: false,
+      isExpanded: true,
+    };
+    setRig((prev) => ({
+      ...prev,
+      groups: [...(prev.groups ?? []), newGroup],
+    }));
+  }
+
+  function handleRenameGroup(groupId: string, name: string) {
+    const nextName = name.trim();
+    if (!nextName) return;
+    setRig((prev) => ({
+      ...prev,
+      groups: (prev.groups ?? []).map((group) =>
+        group.id === groupId ? { ...group, name: nextName } : group
+      ),
+    }));
+  }
+
+  function handleDeleteGroup(groupId: string) {
+    setRig((prev) => ({
+      ...prev,
+      groups: (prev.groups ?? []).filter((group) => group.id !== groupId),
+      parts: prev.parts.map((part) => (part.groupId === groupId ? { ...part, groupId: null } : part)),
+    }));
+  }
+
+  function handleToggleGroupLock(groupId: string) {
+    setRig((prev) => ({
+      ...prev,
+      groups: (prev.groups ?? []).map((group) =>
+        group.id === groupId ? { ...group, isLocked: !group.isLocked } : group
+      ),
+    }));
+  }
+
+  function handleToggleGroupExpanded(groupId: string) {
+    setRig((prev) => ({
+      ...prev,
+      groups: (prev.groups ?? []).map((group) =>
+        group.id === groupId ? { ...group, isExpanded: !group.isExpanded } : group
+      ),
+    }));
+  }
+
+  function handlePartGroupChange(partId: string, groupId: string) {
+    setRig((prev) => {
+      const part = prev.parts.find((item) => item.id === partId);
+      if (!part) return prev;
+      if (isPartEffectivelyLocked(part, prev.groups)) return prev;
+      const nextGroupId = groupId || null;
+      if (part.groupId === nextGroupId) return prev;
+      if (nextGroupId && !findGroupById(prev.groups, nextGroupId)) return prev;
+      return {
+        ...prev,
+        groups: (prev.groups ?? []).map((group) =>
+          group.id === nextGroupId ? { ...group, isExpanded: true } : group
+        ),
+        parts: prev.parts.map((item) => (item.id === partId ? { ...item, groupId: nextGroupId } : item)),
+      };
+    });
+  }
+
   function handlePartParentChange(partId: string, parentId: string) {
     setRig((prev) => {
       const nextParentId = parentId || null;
       const part = prev.parts.find((p) => p.id === partId);
       if (!part) return prev;
-      if (isPartLocked(part)) return prev;
+      if (isPartEffectivelyLocked(part, prev.groups)) return prev;
       if (part.parentId === nextParentId) return prev;
 
       if (nextParentId === null) {
@@ -237,7 +317,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || isPartLocked(p)) return p;
+        if (p.id !== partId || !p.polygonPoints || isPartEffectivelyLocked(p, prev.groups)) return p;
         const updated = p.polygonPoints.map((pt, i) =>
           i === pointIndex
             ? { x: Math.round(nextPoint.x), y: Math.round(nextPoint.y) }
@@ -266,7 +346,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length <= 3 || isPartLocked(p)) return p;
+        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length <= 3 || isPartEffectivelyLocked(p, prev.groups)) return p;
         const updated = p.polygonPoints.filter((_, i) => i !== pointIndex);
         const xs = updated.map((pt) => pt.x);
         const ys = updated.map((pt) => pt.y);
@@ -295,7 +375,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length < 3 || isPartLocked(p)) return p;
+        if (p.id !== partId || !p.polygonPoints || p.polygonPoints.length < 3 || isPartEffectivelyLocked(p, prev.groups)) return p;
         const updated = [
           ...p.polygonPoints.slice(0, afterIndex + 1),
           { x: Math.round(point.x), y: Math.round(point.y) },
@@ -323,7 +403,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) =>
-        p.id === partId && !isPartLocked(p) ? { ...p, movementPoint: point } : p
+        p.id === partId && !isPartEffectivelyLocked(p, prev.groups) ? { ...p, movementPoint: point } : p
       ),
     }));
   }
@@ -392,7 +472,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) => {
-        if (p.id !== partId || isPartLocked(p)) return p;
+        if (p.id !== partId || isPartEffectivelyLocked(p, prev.groups)) return p;
         return {
           ...p,
           movementPoint: {
@@ -408,7 +488,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) =>
-        p.id === partId && !isPartLocked(p) ? { ...p, rotation: (p.rotation - 15 + 360) % 360 } : p
+        p.id === partId && !isPartEffectivelyLocked(p, prev.groups) ? { ...p, rotation: (p.rotation - 15 + 360) % 360 } : p
       ),
     }));
   }
@@ -417,7 +497,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setRig((prev) => ({
       ...prev,
       parts: prev.parts.map((p) =>
-        p.id === partId && !isPartLocked(p) ? { ...p, rotation: (p.rotation + 15) % 360 } : p
+        p.id === partId && !isPartEffectivelyLocked(p, prev.groups) ? { ...p, rotation: (p.rotation + 15) % 360 } : p
       ),
     }));
   }
@@ -425,7 +505,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   function handleResetRotation(partId: string) {
     setRig((prev) => ({
       ...prev,
-      parts: prev.parts.map((p) => (p.id === partId && !isPartLocked(p) ? { ...p, rotation: 0 } : p)),
+      parts: prev.parts.map((p) => (p.id === partId && !isPartEffectivelyLocked(p, prev.groups) ? { ...p, rotation: 0 } : p)),
     }));
   }
 
@@ -562,8 +642,15 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
         <PartsSidebar
           parts={rig.parts}
+          groups={rig.groups ?? []}
           selectedPartId={selectedPartId}
           onSelectPart={handleSelectPart}
+          onCreateGroup={handleCreateGroup}
+          onRenameGroup={handleRenameGroup}
+          onDeleteGroup={handleDeleteGroup}
+          onToggleGroupLock={handleToggleGroupLock}
+          onToggleGroupExpanded={handleToggleGroupExpanded}
+          onPartGroupChange={handlePartGroupChange}
           onPartParentChange={handlePartParentChange}
           onPartReorderByDrag={handlePartReorderByDrag}
           onDeletePart={handleDeletePart}
