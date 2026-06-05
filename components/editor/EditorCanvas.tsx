@@ -16,6 +16,9 @@ const MAX_ANCESTOR_DEPTH = 20;
 // Visual constants for the movement-point indicator (screen pixels)
 const PIVOT_RING_R = 6;
 const PIVOT_ARM_LEN = 9;
+// Link handle — offset from pivot center and its own radius (screen pixels)
+const LINK_HANDLE_OFFSET = 11;
+const LINK_HANDLE_R = 4.5;
 
 interface StageTransform {
   x: number;
@@ -48,6 +51,13 @@ interface EditorCanvasProps {
   onGroupDragBegin?: () => void;
   onGroupDragEnd?: () => void;
   showStructure?: boolean;
+  onPartLink?: (childId: string, parentId: string) => void;
+}
+
+interface LinkDrag {
+  fromPos: Point;
+  currentPos: Point;
+  hoverTargetId: string | null;
 }
 
 interface HoveredEdge {
@@ -331,6 +341,7 @@ export default function EditorCanvas({
   onGroupDragBegin,
   onGroupDragEnd,
   showStructure = false,
+  onPartLink,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -349,14 +360,22 @@ export default function EditorCanvas({
   const [hoveredEdge, setHoveredEdge] = useState<HoveredEdge | null>(null);
   const [vertexHovered, setVertexHovered] = useState(false);
   const [selectedPolygonPointIdx, setSelectedPolygonPointIdx] = useState<number | null>(null);
+  const [linkDrag, setLinkDrag] = useState<LinkDrag | null>(null);
+  const [linkHandleHovered, setLinkHandleHovered] = useState(false);
 
   // Clear transient interaction state when the selected part changes
-  useEffect(() => { setLiveVertex(null); setHoveredEdge(null); setSelectedPolygonPointIdx(null); }, [selectedPartId]);
+  useEffect(() => {
+    setLiveVertex(null); setHoveredEdge(null); setSelectedPolygonPointIdx(null);
+    setLinkDrag(null); setLinkHandleHovered(false);
+  }, [selectedPartId]);
   useEffect(() => {
     setGroupDragPointer(null);
   }, [selectedGroupId]);
   // Clear vertex cursor override and selection when switching tools
-  useEffect(() => { setVertexHovered(false); setHoveredEdge(null); setSelectedPolygonPointIdx(null); }, [activeTool]);
+  useEffect(() => {
+    setVertexHovered(false); setHoveredEdge(null); setSelectedPolygonPointIdx(null);
+    setLinkDrag(null); setLinkHandleHovered(false);
+  }, [activeTool]);
   useEffect(() => {
     const selectedPart = selectedPartId
       ? rig.parts.find((part) => part.id === selectedPartId)
@@ -572,6 +591,21 @@ export default function EditorCanvas({
       return;
     }
 
+    if (linkDrag) {
+      const stage = stageRef.current;
+      if (!stage) return;
+      const pos = stage.getPointerPosition();
+      if (!pos) return;
+      const imgPos = toImageCoords(pos.x, pos.y);
+      const candidate = findTopmostVisiblePartAtPoint(rig.parts, rig.groups, imgPos);
+      const hoverTargetId =
+        candidate && candidate.id !== selectedPartId && !isPartEffectivelyLocked(candidate, rig.groups)
+          ? candidate.id
+          : null;
+      setLinkDrag({ ...linkDrag, currentPos: imgPos, hoverTargetId });
+      return;
+    }
+
     if (dragStart) {
       const stage = stageRef.current;
       if (!stage) return;
@@ -682,6 +716,15 @@ export default function EditorCanvas({
   }
 
   function handleMouseUp() {
+    if (linkDrag) {
+      const targetId = linkDrag.hoverTargetId;
+      setLinkDrag(null);
+      if (targetId && selectedPartId) {
+        onPartLink?.(selectedPartId, targetId);
+      }
+      return;
+    }
+
     if (isPanning) {
       setIsPanning(false);
       lastPointer.current = null;
@@ -730,6 +773,8 @@ export default function EditorCanvas({
     setGroupDragPointer(null);
     setPenMousePos(null);
     setHoveredEdge(null);
+    setLinkDrag(null);
+    setLinkHandleHovered(false);
   }
 
   const liveRect = dragStart && dragCurrent ? {
@@ -739,7 +784,9 @@ export default function EditorCanvas({
     height: Math.abs(dragCurrent.y - dragStart.y),
   } : null;
 
-  const cursor = isPanning ? "grabbing"
+  const cursor = linkDrag ? "crosshair"
+    : linkHandleHovered ? "grab"
+    : isPanning ? "grabbing"
     : groupDragPointer ? "grabbing"
     : (activeTool === "pen" && vertexHovered) ? "grab"
     : hoveredEdge ? "copy"
@@ -951,6 +998,43 @@ export default function EditorCanvas({
             ));
 
             return [...lines, ...dotNodes];
+          })()}
+
+          {/* Link drag — target highlight and preview line */}
+          {linkDrag && (() => {
+            const targetPart = linkDrag.hoverTargetId
+              ? rig.parts.find((p) => p.id === linkDrag.hoverTargetId)
+              : null;
+            return (
+              <>
+                {targetPart && (() => {
+                  const pts = getPartDisplayPoints(targetPart, rig.parts);
+                  return (
+                    <KonvaLine
+                      points={pts.flatMap((p) => [p.x, p.y])}
+                      closed
+                      stroke="rgba(74,222,128,0.85)"
+                      strokeWidth={2}
+                      strokeScaleEnabled={false}
+                      fill="rgba(74,222,128,0.07)"
+                      listening={false}
+                    />
+                  );
+                })()}
+                <KonvaLine
+                  points={[
+                    linkDrag.fromPos.x, linkDrag.fromPos.y,
+                    linkDrag.currentPos.x, linkDrag.currentPos.y,
+                  ]}
+                  stroke="rgba(74,222,128,0.85)"
+                  strokeWidth={1.5}
+                  strokeScaleEnabled={false}
+                  dash={[6, 4]}
+                  lineCap="round"
+                  listening={false}
+                />
+              </>
+            );
           })()}
 
           {/* Blue edge highlight + insertion marker when hovering a polygon edge */}
@@ -1202,6 +1286,30 @@ export default function EditorCanvas({
                     });
                   }}
                 />
+                {/* Link handle — only in point-tool + show-structure mode */}
+                {showStructure && isPointTool && !isPartEffectivelyLocked(selectedPart, rig.groups) && (() => {
+                  const hx = dmp.x + LINK_HANDLE_OFFSET / sc;
+                  const hy = dmp.y - LINK_HANDLE_OFFSET / sc;
+                  const hr = LINK_HANDLE_R / sc;
+                  const active = linkHandleHovered || linkDrag !== null;
+                  return (
+                    <KonvaCircle
+                      x={hx}
+                      y={hy}
+                      radius={hr}
+                      fill={active ? "rgba(74,222,128,1)" : "rgba(74,222,128,0.7)"}
+                      stroke="rgba(0,0,0,0.45)"
+                      strokeWidth={1}
+                      strokeScaleEnabled={false}
+                      onMouseEnter={() => setLinkHandleHovered(true)}
+                      onMouseLeave={() => setLinkHandleHovered(false)}
+                      onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
+                        e.cancelBubble = true;
+                        setLinkDrag({ fromPos: dmp, currentPos: dmp, hoverTargetId: null });
+                      }}
+                    />
+                  );
+                })()}
               </>
             );
           })()}

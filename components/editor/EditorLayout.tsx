@@ -780,6 +780,21 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     setPendingHistCommit("Move folder");
   }
 
+  function handlePartLink(childId: string, parentId: string) {
+    if (childId === parentId) return;
+    const child = rig.parts.find((p) => p.id === childId);
+    const parent = rig.parts.find((p) => p.id === parentId);
+    if (!child || !parent) return;
+    if (!isPartEffectivelyVisible(parent, rig.groups)) return;
+    if (isPartEffectivelyLocked(parent, rig.groups)) return;
+    if (isPartEffectivelyLocked(child, rig.groups)) return;
+    if (wouldCreateParentCycle(rig.parts, childId, parentId)) return;
+    commitRig(
+      { ...rig, parts: rig.parts.map((p) => (p.id === childId ? { ...p, parentId } : p)) },
+      "Changed follows"
+    );
+  }
+
   const handleZoomIn = useCallback(() => {
     setStageTransform((t) => ({ ...t, scale: Math.min(MAX_ZOOM, t.scale * (1 + ZOOM_STEP)) }));
   }, []);
@@ -943,6 +958,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             onPolygonPointDelete={handlePolygonPointDelete}
             onGroupDragEnd={handleGroupDragEnd}
             showStructure={showStructure}
+            onPartLink={handlePartLink}
           />
         </div>
 
