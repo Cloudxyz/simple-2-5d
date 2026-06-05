@@ -4,6 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import { findGroupById, isPartDirectlyLocked, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
 import type { CharacterRig, LayerGroup, Part, SavedPose } from "@/types/rig";
 
+interface Preview2d {
+  enabled: boolean;
+  viewX: number;
+  viewY: number;
+}
+
 interface HistoryEntry {
   id: string;
   label: string;
@@ -52,6 +58,9 @@ interface PartsSidebarProps {
   onApplyPose: (poseId: string) => void;
   onRenamePose: (poseId: string, name: string) => void;
   onDeletePose: (poseId: string) => void;
+  onChangeDepth: (partId: string, depth: number) => void;
+  preview2d: Preview2d;
+  onSet2dPreview: (p: Preview2d) => void;
   isPreviewPlaying: boolean;
   onStartPreview: (fromPoseId: string, toPoseId: string, durationSecs: number, loop: boolean) => void;
   onStopPreview: () => void;
@@ -132,6 +141,9 @@ export default function PartsSidebar({
   onApplyPose,
   onRenamePose,
   onDeletePose,
+  onChangeDepth,
+  preview2d,
+  onSet2dPreview,
   isPreviewPlaying,
   onStartPreview,
   onStopPreview,
@@ -825,6 +837,51 @@ export default function PartsSidebar({
             </div>
           )}
 
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-zinc-600">Depth</p>
+              <span className="text-xs text-zinc-500 tabular-nums">{selectedPart.depth ?? 0}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min={-100}
+                max={100}
+                step={1}
+                value={selectedPart.depth ?? 0}
+                disabled={selectedPartEffectiveLocked}
+                onChange={(e) => onChangeDepth(selectedPart.id, parseInt(e.target.value, 10))}
+                className="flex-1 accent-violet-500 disabled:opacity-40"
+              />
+              <div className="flex gap-1">
+                <button
+                  onClick={() => onChangeDepth(selectedPart.id, -100)}
+                  disabled={selectedPartEffectiveLocked || (selectedPart.depth ?? 0) === -100}
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Set to back (-100)"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={() => onChangeDepth(selectedPart.id, 0)}
+                  disabled={selectedPartEffectiveLocked || (selectedPart.depth ?? 0) === 0}
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Reset depth to 0"
+                >
+                  0
+                </button>
+                <button
+                  onClick={() => onChangeDepth(selectedPart.id, 100)}
+                  disabled={selectedPartEffectiveLocked || (selectedPart.depth ?? 0) === 100}
+                  className="text-[10px] px-1.5 py-0.5 rounded border border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Set to front (100)"
+                >
+                  Front
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-zinc-600 flex items-center gap-1">
               <span className="text-amber-500/70">⊕</span>
@@ -1029,6 +1086,64 @@ export default function PartsSidebar({
           </div>
         );
       })()}
+
+      {/* 2.5D Preview panel */}
+      <div className="border-t border-zinc-800 flex-shrink-0 px-3 py-2 space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">2.5D Preview</p>
+          <button
+            onClick={() => onSet2dPreview({ ...preview2d, enabled: !preview2d.enabled })}
+            className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
+              preview2d.enabled
+                ? "border-violet-600 text-violet-300 bg-violet-900/30"
+                : "border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            {preview2d.enabled ? "On" : "Off"}
+          </button>
+        </div>
+        {preview2d.enabled && (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-zinc-600 w-10 flex-shrink-0">View X</span>
+              <input
+                type="range"
+                min={-1}
+                max={1}
+                step={0.01}
+                value={preview2d.viewX}
+                onChange={(e) => onSet2dPreview({ ...preview2d, viewX: parseFloat(e.target.value) })}
+                className="flex-1 accent-violet-500"
+              />
+              <span className="text-[11px] text-zinc-500 tabular-nums w-9 text-right">
+                {preview2d.viewX.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-zinc-600 w-10 flex-shrink-0">View Y</span>
+              <input
+                type="range"
+                min={-1}
+                max={1}
+                step={0.01}
+                value={preview2d.viewY}
+                onChange={(e) => onSet2dPreview({ ...preview2d, viewY: parseFloat(e.target.value) })}
+                className="flex-1 accent-violet-500"
+              />
+              <span className="text-[11px] text-zinc-500 tabular-nums w-9 text-right">
+                {preview2d.viewY.toFixed(2)}
+              </span>
+            </div>
+            <button
+              onClick={() => onSet2dPreview({ ...preview2d, viewX: 0, viewY: 0 })}
+              disabled={preview2d.viewX === 0 && preview2d.viewY === 0}
+              className="text-[11px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              Reset view
+            </button>
+          </>
+        )}
+      </div>
 
       {/* History panel */}
       <div className="border-t border-zinc-800 flex-shrink-0">

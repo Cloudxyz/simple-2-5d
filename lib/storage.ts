@@ -51,6 +51,7 @@ export function loadProject(): CharacterRig | null {
       groupId: (p as { groupId?: string | null }).groupId ?? null,
       isLocked: (p as { isLocked?: boolean }).isLocked ?? false,
       rotation: (p as { rotation?: number }).rotation ?? 0,
+      depth: (p as { depth?: number }).depth ?? 0,
       polygonPoints: (p as { polygonPoints?: import("@/types/rig").Point[] | null }).polygonPoints ?? null,
     }));
     rig.poses = rig.poses ?? [];

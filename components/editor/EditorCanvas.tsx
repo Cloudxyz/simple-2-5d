@@ -8,6 +8,7 @@ import { findGroupById, isPartEffectivelyLocked, isPartEffectivelyVisible } from
 import type { BoundingBox, CharacterRig, LayerGroup, Part, Point } from "@/types/rig";
 
 const MIN_ZOOM = 0.05;
+const DEPTH_STRENGTH = 0.25;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 0.15;
 const MIN_SELECTION_PX = 5;
@@ -24,6 +25,12 @@ interface StageTransform {
   x: number;
   y: number;
   scale: number;
+}
+
+interface Preview2d {
+  enabled: boolean;
+  viewX: number;
+  viewY: number;
 }
 
 interface EditorCanvasProps {
@@ -53,6 +60,7 @@ interface EditorCanvasProps {
   showStructure?: boolean;
   onPartLink?: (childId: string, parentId: string) => void;
   previewRotations?: Record<string, number> | null;
+  preview2d?: Preview2d | null;
 }
 
 interface LinkDrag {
@@ -344,6 +352,7 @@ export default function EditorCanvas({
   showStructure = false,
   onPartLink,
   previewRotations = null,
+  preview2d = null,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -814,6 +823,15 @@ export default function EditorCanvas({
   const pivotR = PIVOT_RING_R / sc;
   const pivotArm = PIVOT_ARM_LEN / sc;
 
+  function depthOff(part: Part): { ox: number; oy: number } {
+    if (!preview2d?.enabled) return { ox: 0, oy: 0 };
+    const d = part.depth ?? 0;
+    return {
+      ox: d * preview2d.viewX * DEPTH_STRENGTH,
+      oy: d * preview2d.viewY * DEPTH_STRENGTH,
+    };
+  }
+
   if (!rig.imageDataUrl) {
     return (
       <div ref={containerRef} className="w-full h-full">
@@ -861,11 +879,12 @@ export default function EditorCanvas({
             const stroke = sel ? "rgba(167,139,250,1)" : "rgba(139,92,246,0.7)";
             const fill = sel ? "rgba(139,92,246,0.18)" : "rgba(139,92,246,0.06)";
             const strokeWidth = sel ? 2 : 1;
+            const { ox, oy } = depthOff(part);
 
             // Render preview: apply inherited parent rotation transforms
             const partAncestors = getAncestorChain(displayParts, part.id);
             if (partAncestors.some((a) => a.rotation !== 0)) {
-              const flatPts = getPartDisplayPoints(part, displayParts).flatMap((p) => [p.x, p.y]);
+              const flatPts = getPartDisplayPoints(part, displayParts).flatMap((p) => [p.x + ox, p.y + oy]);
               return (
                 <KonvaLine
                   key={part.id}
@@ -880,7 +899,6 @@ export default function EditorCanvas({
             }
 
             if (part.polygonPoints && part.polygonPoints.length >= 3) {
-              // Substitute the live drag position for the vertex being moved
               const flatPts = part.polygonPoints.flatMap((p, i) => {
                 if (liveVertex?.partId === part.id && liveVertex.idx === i) {
                   return [liveVertex.polygonPos.x, liveVertex.polygonPos.y];
@@ -891,9 +909,8 @@ export default function EditorCanvas({
                 <KonvaLine
                   key={part.id}
                   points={flatPts}
-                  // x/offsetX pattern: translate(mp) * rotate * translate(-mp)
-                  x={mp.x}
-                  y={mp.y}
+                  x={mp.x + ox}
+                  y={mp.y + oy}
                   offsetX={mp.x}
                   offsetY={mp.y}
                   rotation={part.rotation}
@@ -909,8 +926,8 @@ export default function EditorCanvas({
             return (
               <KonvaRect
                 key={part.id}
-                x={mp.x}
-                y={mp.y}
+                x={mp.x + ox}
+                y={mp.y + oy}
                 offsetX={mp.x - part.bounds.x}
                 offsetY={mp.y - part.bounds.y}
                 width={part.bounds.width}
@@ -969,8 +986,12 @@ export default function EditorCanvas({
               const parent = partsById.get(child.parentId);
               if (!parent || !visibleIds.has(parent.id)) continue;
 
-              const parentPos = getDisplayMP(parent, displayParts);
-              const childPos = getDisplayMP(child, displayParts);
+              const parentMp = getDisplayMP(parent, displayParts);
+              const childMp = getDisplayMP(child, displayParts);
+              const pOff = depthOff(parent);
+              const cOff = depthOff(child);
+              const parentPos = { x: parentMp.x + pOff.ox, y: parentMp.y + pOff.oy };
+              const childPos = { x: childMp.x + cOff.ox, y: childMp.y + cOff.oy };
               const highlighted = child.id === selectedPartId || parent.id === selectedPartId;
 
               lines.push(
@@ -1017,10 +1038,11 @@ export default function EditorCanvas({
             return (
               <>
                 {targetPart && (() => {
+                  const { ox: tox, oy: toy } = depthOff(targetPart);
                   const pts = getPartDisplayPoints(targetPart, displayParts);
                   return (
                     <KonvaLine
-                      points={pts.flatMap((p) => [p.x, p.y])}
+                      points={pts.flatMap((p) => [p.x + tox, p.y + toy])}
                       closed
                       stroke="rgba(74,222,128,0.85)"
                       strokeWidth={2}
@@ -1087,28 +1109,28 @@ export default function EditorCanvas({
 
             const vtxAncestors = getAncestorChain(displayParts, part.id);
             const hasActiveAncestorRot = vtxAncestors.some((a) => a.rotation !== 0);
-            // Pre-compute display positions for all vertices when ancestor rotation is active
             const inheritedPts = hasActiveAncestorRot ? getPartDisplayPoints(part, displayParts) : null;
+            const { ox: vtxOx, oy: vtxOy } = depthOff(part);
+            const vtxEditBlocked = hasActiveAncestorRot || !!preview2d?.enabled;
 
             return (
               <>
                 {part.polygonPoints.map((pt, i) => {
                   let cx: number, cy: number;
                   if (inheritedPts) {
-                    cx = inheritedPts[i].x;
-                    cy = inheritedPts[i].y;
+                    cx = inheritedPts[i].x + vtxOx;
+                    cy = inheritedPts[i].y + vtxOy;
                   } else {
                     const dx = pt.x - mp.x;
                     const dy = pt.y - mp.y;
                     const defaultX = cos * dx - sin * dy + mp.x;
                     const defaultY = sin * dx + cos * dy + mp.y;
-                    // During drag, use the live stage position — prevents react-konva snap-back
                     const isLive = liveVertex?.partId === part.id && liveVertex.idx === i;
-                    cx = isLive ? liveVertex!.stagePos.x : defaultX;
-                    cy = isLive ? liveVertex!.stagePos.y : defaultY;
+                    cx = (isLive ? liveVertex!.stagePos.x : defaultX) + vtxOx;
+                    cy = (isLive ? liveVertex!.stagePos.y : defaultY) + vtxOy;
                   }
 
-                  const canEdit = !hasActiveAncestorRot && !isPartEffectivelyLocked(part, rig.groups);
+                  const canEdit = !vtxEditBlocked && !isPartEffectivelyLocked(part, rig.groups);
                   const isSelected = canEdit && activeTool === "pen" && selectedPolygonPointIdx === i;
                   return (
                     <KonvaCircle
@@ -1116,7 +1138,7 @@ export default function EditorCanvas({
                       x={cx}
                       y={cy}
                       radius={isSelected ? 6 / sc : 4 / sc}
-                      fill={hasActiveAncestorRot ? "rgba(167,139,250,0.45)" : (isSelected ? "rgba(255,255,255,1)" : "rgba(167,139,250,0.95)")}
+                      fill={vtxEditBlocked ? "rgba(167,139,250,0.45)" : (isSelected ? "rgba(255,255,255,1)" : "rgba(167,139,250,0.95)")}
                       stroke={isSelected ? "rgba(167,139,250,1)" : "rgba(255,255,255,0.5)"}
                       strokeWidth={isSelected ? 2 : 1}
                       strokeScaleEnabled={false}
@@ -1246,9 +1268,11 @@ export default function EditorCanvas({
                Drag end inverse-transforms back to image-local before storing. */}
           {selectedPart && (() => {
             const mpAncestors = getAncestorChain(displayParts, selectedPart.id);
-            // Display the pivot at its world-space position (accounts for parent rotation)
-            const dmp = applyAncestorTransform(selectedPart.movementPoint, mpAncestors);
+            const rawDmp = applyAncestorTransform(selectedPart.movementPoint, mpAncestors);
+            const { ox: pivOx, oy: pivOy } = depthOff(selectedPart);
+            const dmp = { x: rawDmp.x + pivOx, y: rawDmp.y + pivOy };
             const isPointTool = activeTool === "point";
+            const pivotDragBlocked = !!preview2d?.enabled;
             const color = isPointTool ? "rgba(251,191,36,1)" : "rgba(251,191,36,0.55)";
             const fillColor = isPointTool ? "rgba(251,191,36,0.2)" : "rgba(251,191,36,0.08)";
 
@@ -1268,7 +1292,7 @@ export default function EditorCanvas({
                   strokeScaleEnabled={false}
                   listening={false}
                 />
-                {/* Ring — draggable in point-tool mode */}
+                {/* Ring — draggable in point-tool mode (disabled during 2.5D preview) */}
                 <KonvaCircle
                   x={dmp.x}
                   y={dmp.y}
@@ -1277,15 +1301,16 @@ export default function EditorCanvas({
                   stroke={color}
                   strokeWidth={1.5}
                   strokeScaleEnabled={false}
-                  draggable={isPointTool && !isPartEffectivelyLocked(selectedPart, rig.groups)}
+                  draggable={isPointTool && !isPartEffectivelyLocked(selectedPart, rig.groups) && !pivotDragBlocked}
                   onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
                     e.cancelBubble = true;
                   }}
                   onDragEnd={(e) => {
+                    if (pivotDragBlocked) return;
                     e.cancelBubble = true;
                     const node = e.target;
-                    const worldPos: Point = { x: Math.round(node.x()), y: Math.round(node.y()) };
-                    // Inverse-transform world drag position → image-local for storage
+                    // Subtract depth offset before inverse-transforming back to stored coords
+                    const worldPos: Point = { x: Math.round(node.x()) - pivOx, y: Math.round(node.y()) - pivOy };
                     const stored = mpAncestors.length > 0
                       ? inverseAncestorTransform(worldPos, mpAncestors)
                       : worldPos;

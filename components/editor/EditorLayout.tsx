@@ -11,6 +11,12 @@ import { saveProject, loadProject, clearProject } from "@/lib/storage";
 import { findGroupById, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
 import type { BoundingBox, CharacterRig, LayerGroup, Part, SavedPose, TimelineStep } from "@/types/rig";
 
+interface Preview2d {
+  enabled: boolean;
+  viewX: number;
+  viewY: number;
+}
+
 interface EditorLayoutProps {
   characterName: string;
   /** When true, ignore any saved project and start fresh. Set via ?new=1. */
@@ -183,6 +189,8 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     loop: boolean;
     startTime: number;
   } | null>(null);
+
+  const [preview2d, setPreview2d] = useState<Preview2d>({ enabled: false, viewX: 0, viewY: 0 });
 
   function stopPreview() {
     if (previewRafRef.current !== null) {
@@ -888,6 +896,16 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     stopPreview();
   }
 
+  function handleChangeDepth(partId: string, depth: number) {
+    commitRig(
+      {
+        ...rig,
+        parts: rig.parts.map((p) => (p.id === partId ? { ...p, depth } : p)),
+      },
+      "Changed depth"
+    );
+  }
+
   function handleAddTimelineStep(poseId: string) {
     const poses = rig.poses ?? [];
     if (!poses.some((p) => p.id === poseId)) return;
@@ -1242,6 +1260,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             showStructure={showStructure}
             onPartLink={handlePartLink}
             previewRotations={previewRotations}
+            preview2d={preview2d}
           />
           </div>
 
@@ -1297,6 +1316,9 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onApplyPose={handleApplyPose}
           onRenamePose={handleRenamePose}
           onDeletePose={handleDeletePose}
+          onChangeDepth={handleChangeDepth}
+          preview2d={preview2d}
+          onSet2dPreview={setPreview2d}
           history={hist.entries}
           historyIndex={hist.index}
           onHistoryJump={handleHistoryJump}

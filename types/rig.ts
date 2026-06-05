@@ -27,6 +27,8 @@ export interface Part {
   isLocked?: boolean;
   /** Rotation around the movement point, in degrees */
   rotation: number;
+  /** Depth for 2.5D parallax preview. 0 = neutral. Suggested range: -100 to 100. */
+  depth?: number;
   /** Polygon vertices in image-local coords. Null for rectangle-created parts.
    *  Polygon crop is future work — PNG export uses bounds as fallback. */
   polygonPoints?: Point[] | null;
