@@ -25,6 +25,9 @@ export interface Part {
   isVisible: boolean;
   /** Rotation around the movement point, in degrees */
   rotation: number;
+  /** Polygon vertices in image-local coords. Null for rectangle-created parts.
+   *  Polygon crop is future work — PNG export uses bounds as fallback. */
+  polygonPoints?: Point[] | null;
 }
 
 export interface CharacterRig {

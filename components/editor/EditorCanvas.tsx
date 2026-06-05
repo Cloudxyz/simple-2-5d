@@ -23,7 +23,7 @@ interface StageTransform {
 
 interface EditorCanvasProps {
   rig: CharacterRig;
-  activeTool: "select" | "move" | "point";
+  activeTool: "select" | "move" | "point" | "pen";
   selectedPartId: string | null;
   onImageUpload: (dataUrl: string) => void;
   onSelectionComplete: (bounds: BoundingBox) => void;
@@ -32,6 +32,12 @@ interface EditorCanvasProps {
   stageTransform: StageTransform;
   onStageTransformChange: (t: StageTransform) => void;
   resetKey: number;
+  penPoints: Point[];
+  penClosed: boolean;
+  onPenAddPoint: (pt: Point) => void;
+  onPenRemoveLastPoint: () => void;
+  onPenComplete: (points: Point[]) => void;
+  onPenCancel: () => void;
 }
 
 function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
@@ -89,6 +95,12 @@ export default function EditorCanvas({
   stageTransform,
   onStageTransformChange,
   resetKey,
+  penPoints,
+  penClosed,
+  onPenAddPoint,
+  onPenRemoveLastPoint,
+  onPenComplete,
+  onPenCancel,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -100,6 +112,8 @@ export default function EditorCanvas({
 
   const [dragStart, setDragStart] = useState<Point | null>(null);
   const [dragCurrent, setDragCurrent] = useState<Point | null>(null);
+  const [penMousePos, setPenMousePos] = useState<Point | null>(null);
+  const [dashOffset, setDashOffset] = useState(0);
 
   useEffect(() => {
     if (!rig.imageDataUrl) { setKonvaImage(null); return; }
@@ -133,6 +147,35 @@ export default function EditorCanvas({
   }, [konvaImage, centerImage, resetKey]);
 
   useEffect(() => { hasCentered.current = false; }, [rig.imageDataUrl]);
+
+  // Marching ants animation — runs whenever the pen polygon is visible
+  const hasPenPoints = penPoints.length > 0;
+  useEffect(() => {
+    if (!hasPenPoints) return;
+    const id = setInterval(() => setDashOffset((d) => d + 1), 50);
+    return () => clearInterval(id);
+  }, [hasPenPoints]);
+
+  // Keyboard shortcuts active while pen tool is selected
+  useEffect(() => {
+    if (activeTool !== "pen") return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (penClosed) return;
+      if (e.key === "Escape") {
+        onPenCancel();
+      } else if (e.key === "Enter") {
+        if (penPoints.length >= 3) {
+          e.preventDefault();
+          onPenComplete(penPoints);
+        }
+      } else if (e.key === "Backspace") {
+        e.preventDefault();
+        onPenRemoveLastPoint();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeTool, penClosed, penPoints, onPenComplete, onPenCancel, onPenRemoveLastPoint]);
 
   function loadFile(file: File) {
     if (!file.type.startsWith("image/")) return;
@@ -191,6 +234,23 @@ export default function EditorCanvas({
       setDragStart(imgPos);
       setDragCurrent(imgPos);
     }
+
+    if (activeTool === "pen" && isLeft && !penClosed) {
+      const stage = stageRef.current;
+      if (!stage) return;
+      const pos = stage.getPointerPosition();
+      if (!pos) return;
+      const imgPos = toImageCoords(pos.x, pos.y);
+      if (penPoints.length >= 3) {
+        const first = penPoints[0];
+        const snapDist = 12 / stageTransform.scale;
+        if (Math.hypot(imgPos.x - first.x, imgPos.y - first.y) < snapDist) {
+          onPenComplete(penPoints);
+          return;
+        }
+      }
+      onPenAddPoint(imgPos);
+    }
   }
 
   function handleMouseMove(e: KonvaEventObject<MouseEvent>) {
@@ -208,6 +268,13 @@ export default function EditorCanvas({
       const pos = stage.getPointerPosition();
       if (!pos) return;
       setDragCurrent(toImageCoords(pos.x, pos.y));
+    }
+
+    if (activeTool === "pen" && !penClosed) {
+      const stage = stageRef.current;
+      if (!stage) return;
+      const pos = stage.getPointerPosition();
+      if (pos) setPenMousePos(toImageCoords(pos.x, pos.y));
     }
   }
 
@@ -249,6 +316,7 @@ export default function EditorCanvas({
     lastPointer.current = null;
     setDragStart(null);
     setDragCurrent(null);
+    setPenMousePos(null);
   }
 
   const liveRect = dragStart && dragCurrent ? {
@@ -261,6 +329,7 @@ export default function EditorCanvas({
   const cursor = isPanning ? "grabbing"
     : activeTool === "move" ? "grab"
     : activeTool === "select" ? "crosshair"
+    : activeTool === "pen" ? "crosshair"
     : "default";
 
   // The part whose pivot we show — must be selected and visible
@@ -310,11 +379,46 @@ export default function EditorCanvas({
             />
           )}
 
-          {/* Saved part rectangles — sorted ascending so higher zIndex renders on top */}
+          {/* Saved parts — sorted ascending so higher zIndex renders on top.
+               Polygon parts use KonvaLine (closed); rectangle parts use KonvaRect.
+               Both use the same x/offsetX rotation trick to pivot around movementPoint. */}
           {[...rig.parts].sort((a, b) => a.zIndex - b.zIndex).map((part) => {
             if (!part.isVisible) return null;
             const sel = part.id === selectedPartId;
             const mp = part.movementPoint;
+            const stroke = sel ? "rgba(167,139,250,1)" : "rgba(139,92,246,0.7)";
+            const fill = sel ? "rgba(139,92,246,0.18)" : "rgba(139,92,246,0.06)";
+            const strokeWidth = sel ? 2 : 1;
+
+            if (part.polygonPoints && part.polygonPoints.length >= 3) {
+              const flatPts = part.polygonPoints.flatMap((p) => [p.x, p.y]);
+              return (
+                <KonvaLine
+                  key={part.id}
+                  points={flatPts}
+                  // x/offsetX pattern: translate(mp) * rotate * translate(-mp)
+                  // — identical pivot mechanic to KonvaRect below
+                  x={mp.x}
+                  y={mp.y}
+                  offsetX={mp.x}
+                  offsetY={mp.y}
+                  rotation={part.rotation}
+                  closed
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  strokeScaleEnabled={false}
+                  fill={fill}
+                  onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
+                    if (activeTool === "select" && e.evt.button === 0) e.cancelBubble = true;
+                  }}
+                  onClick={(e: KonvaEventObject<MouseEvent>) => {
+                    e.cancelBubble = true;
+                    onSelectPart(part.id);
+                  }}
+                />
+              );
+            }
+
             return (
               <KonvaRect
                 key={part.id}
@@ -326,10 +430,10 @@ export default function EditorCanvas({
                 width={part.bounds.width}
                 height={part.bounds.height}
                 rotation={part.rotation}
-                stroke={sel ? "rgba(167,139,250,1)" : "rgba(139,92,246,0.7)"}
-                strokeWidth={sel ? 2 : 1}
+                stroke={stroke}
+                strokeWidth={strokeWidth}
                 strokeScaleEnabled={false}
-                fill={sel ? "rgba(139,92,246,0.18)" : "rgba(139,92,246,0.06)"}
+                fill={fill}
                 onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
                   if (activeTool === "select" && e.evt.button === 0) e.cancelBubble = true;
                 }}
@@ -356,6 +460,79 @@ export default function EditorCanvas({
               listening={false}
             />
           )}
+
+          {/* Pen tool polygon overlay */}
+          {activeTool === "pen" && penPoints.length > 0 && (() => {
+            const flatPoints = penPoints.flatMap((p) => [p.x, p.y]);
+            const SNAP = 12 / sc;
+            const nearFirst =
+              !penClosed &&
+              penMousePos !== null &&
+              penPoints.length >= 3 &&
+              Math.hypot(penMousePos.x - penPoints[0].x, penMousePos.y - penPoints[0].y) < SNAP;
+
+            return (
+              <>
+                {penClosed ? (
+                  <>
+                    {/* Marching ants — white pass */}
+                    <KonvaLine
+                      points={flatPoints}
+                      closed
+                      stroke="rgba(255,255,255,0.9)"
+                      strokeWidth={1.5}
+                      strokeScaleEnabled={false}
+                      dash={[8, 6]}
+                      dashOffset={-dashOffset}
+                      fill="rgba(139,92,246,0.1)"
+                      listening={false}
+                    />
+                    {/* Marching ants — dark pass offset by half pattern for contrast */}
+                    <KonvaLine
+                      points={flatPoints}
+                      closed
+                      stroke="rgba(0,0,0,0.65)"
+                      strokeWidth={1.5}
+                      strokeScaleEnabled={false}
+                      dash={[8, 6]}
+                      dashOffset={-dashOffset - 8}
+                      listening={false}
+                    />
+                  </>
+                ) : (
+                  /* In-progress polygon with preview line to cursor */
+                  <KonvaLine
+                    points={[
+                      ...flatPoints,
+                      ...(penMousePos ? [penMousePos.x, penMousePos.y] : []),
+                    ]}
+                    stroke="rgba(255,255,255,0.85)"
+                    strokeWidth={1.5}
+                    strokeScaleEnabled={false}
+                    dash={[4, 4]}
+                    listening={false}
+                  />
+                )}
+                {/* Point markers */}
+                {penPoints.map((pt, i) => {
+                  const isSnapTarget = i === 0 && nearFirst;
+                  return (
+                    <KonvaCircle
+                      key={i}
+                      x={pt.x}
+                      y={pt.y}
+                      radius={(isSnapTarget ? 6 : 4) / sc}
+                      fill={isSnapTarget ? "rgba(167,139,250,1)" : "rgba(255,255,255,0.95)"}
+                      stroke="rgba(0,0,0,0.55)"
+                      strokeWidth={1}
+                      strokeScaleEnabled={false}
+                      listening={false}
+                    />
+                  );
+                })}
+              </>
+            );
+          })()}
 
           {/* Movement point indicator — shown whenever a visible part is selected */}
           {selectedPart && (() => {

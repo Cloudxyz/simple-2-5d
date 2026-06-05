@@ -34,11 +34,13 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     imageDataUrl: null,
   });
 
-  const [activeTool, setActiveTool] = useState<"select" | "move" | "point">("select");
+  const [activeTool, setActiveTool] = useState<"select" | "move" | "point" | "pen">("select");
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
   const [stageTransform, setStageTransform] = useState<StageTransform>({ x: 0, y: 0, scale: 1 });
   const [resetKey, setResetKey] = useState(0);
   const [pendingBounds, setPendingBounds] = useState<BoundingBox | null>(null);
+  const [penPoints, setPenPoints] = useState<{ x: number; y: number }[]>([]);
+  const [penClosed, setPenClosed] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
@@ -55,6 +57,40 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     const t = setTimeout(() => setSaveStatus("idle"), 2500);
     return () => clearTimeout(t);
   }, [saveStatus]);
+
+  // Cancel in-progress pen selection when switching away from pen tool
+  useEffect(() => {
+    if (activeTool !== "pen") {
+      setPenPoints([]);
+      setPenClosed(false);
+    }
+  }, [activeTool]);
+
+  function handlePenAddPoint(pt: { x: number; y: number }) {
+    setPenPoints((prev) => [...prev, pt]);
+  }
+
+  function handlePenRemoveLastPoint() {
+    setPenPoints((prev) => prev.slice(0, -1));
+  }
+
+  function handlePenComplete(points: { x: number; y: number }[]) {
+    if (penClosed || points.length < 3) return;
+    const xs = points.map((p) => p.x);
+    const ys = points.map((p) => p.y);
+    const minX = Math.round(Math.min(...xs));
+    const minY = Math.round(Math.min(...ys));
+    const w = Math.round(Math.max(...xs) - minX);
+    const h = Math.round(Math.max(...ys) - minY);
+    if (w < 1 || h < 1) return;
+    setPenClosed(true);
+    setPendingBounds({ x: minX, y: minY, width: w, height: h });
+  }
+
+  function handlePenCancel() {
+    setPenPoints([]);
+    setPenClosed(false);
+  }
 
   function handleImageUpload(dataUrl: string) {
     setRig((prev) => ({ ...prev, imageDataUrl: dataUrl }));
@@ -97,14 +133,19 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       imageDataUrl: null,
       isVisible: true,
       rotation: 0,
+      polygonPoints: penClosed && penPoints.length >= 3 ? [...penPoints] : null,
     };
     setRig((prev) => ({ ...prev, parts: [...prev.parts, newPart] }));
     setSelectedPartId(newPart.id);
     setPendingBounds(null);
+    setPenPoints([]);
+    setPenClosed(false);
   }
 
   function handleCancelPart() {
     setPendingBounds(null);
+    setPenPoints([]);
+    setPenClosed(false);
   }
 
   function handleSelectPart(id: string | null) {
@@ -332,6 +373,12 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             stageTransform={stageTransform}
             onStageTransformChange={setStageTransform}
             resetKey={resetKey}
+            penPoints={penPoints}
+            penClosed={penClosed}
+            onPenAddPoint={handlePenAddPoint}
+            onPenRemoveLastPoint={handlePenRemoveLastPoint}
+            onPenComplete={handlePenComplete}
+            onPenCancel={handlePenCancel}
           />
         </div>
 

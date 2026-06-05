@@ -1,6 +1,6 @@
 "use client";
 
-type Tool = "select" | "move" | "point";
+type Tool = "select" | "move" | "point" | "pen";
 
 interface ToolbarProps {
   activeTool: Tool;
@@ -14,6 +14,7 @@ interface ToolbarProps {
 
 const tools: { id: Tool; label: string; icon: string; description: string }[] = [
   { id: "select", label: "Select", icon: "↖", description: "Select and define a part" },
+  { id: "pen", label: "Pluma", icon: "✏", description: "Define a part by clicking points" },
   { id: "move", label: "Move", icon: "✥", description: "Drag to pan the canvas" },
   { id: "point", label: "Movement point", icon: "⊕", description: "Set the pivot for a part" },
 ];

@@ -34,6 +34,9 @@ export interface ExportPart {
   parentId: string | null;
   /** PNG filename in the export bundle, null for hidden parts */
   assetFile: string | null;
+  /** Polygon vertices in image-local coords; null for rectangle-created parts.
+   *  PNG crop uses bounds as fallback — polygon-aware crop is future work. */
+  polygonPoints: { x: number; y: number }[] | null;
 }
 
 function buildExportParts(parts: Part[]): ExportPart[] {
@@ -48,6 +51,7 @@ function buildExportParts(parts: Part[]): ExportPart[] {
     isVisible: p.isVisible,
     parentId: p.parentId,
     assetFile: p.isVisible ? safePartFilename(p.name, visibleIdx++) : null,
+    polygonPoints: p.polygonPoints ?? null,
   }));
 }
 

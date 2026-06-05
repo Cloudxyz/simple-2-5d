@@ -37,9 +37,13 @@ export function loadProject(): CharacterRig | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<SavedProject>;
     if (parsed.version !== 1 || !parsed.rig) return null;
-    // Migrate old saves that predate the rotation field
+    // Migrate old saves that predate the rotation / polygonPoints fields
     const rig = parsed.rig;
-    rig.parts = rig.parts.map((p) => ({ ...p, rotation: (p as { rotation?: number }).rotation ?? 0 }));
+    rig.parts = rig.parts.map((p) => ({
+      ...p,
+      rotation: (p as { rotation?: number }).rotation ?? 0,
+      polygonPoints: (p as { polygonPoints?: import("@/types/rig").Point[] | null }).polygonPoints ?? null,
+    }));
     return rig;
   } catch {
     return null;
