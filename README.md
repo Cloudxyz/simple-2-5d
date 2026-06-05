@@ -4,6 +4,12 @@ Convierte un PNG transparente en un personaje 2.5D que puedes posar y exportar �
 
 Subes una imagen de tu personaje, la divides en partes con nombre (cabeza, brazo, pierna, etc.), le pones un punto de movimiento a cada parte, las ordenás por capas, y exportás todo como PNGs individuales más un archivo JSON con la estructura del rig.
 
+Si este proyecto te sirve o querés apoyar su desarrollo, podés invitarme un café:
+
+<a href="https://buymeacoffee.com/devalan" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Invítame un café en buymeacoffee.com" width="180">
+</a>
+
 ---
 
 ## Estado actual
@@ -144,6 +150,16 @@ Este proyecto es público y open source. Podés clonarlo, bifurcarlo y usarlo li
 ## Contribuir
 
 Las contribuciones son bienvenidas. Si querés agregar algo, abrí un issue primero para discutirlo — especialmente si es un cambio grande. Mantenelo simple y dentro del alcance de lo que esta herramienta hace.
+
+---
+
+## Apoyar el proyecto
+
+Si SIMPLE 2.5D te fue útil, podés apoyar el proyecto acá:
+
+<a href="https://buymeacoffee.com/devalan" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Invítame un café en buymeacoffee.com" width="180">
+</a>
 
 ---
 
