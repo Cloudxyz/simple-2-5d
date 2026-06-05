@@ -27,6 +27,7 @@ interface PartsSidebarProps {
   onPartGroupChange: (partId: string, groupId: string) => void;
   onPartRename: (partId: string, name: string) => void;
   onPartParentChange: (partId: string, parentId: string) => void;
+  onRemovePartLink: (partId: string) => void;
   onPartReorderByDrag: (sourcePartId: string, targetPartId: string, placeAfter: boolean) => void;
   onGroupReorderByDrag: (
     sourceGroupId: string,
@@ -102,6 +103,7 @@ export default function PartsSidebar({
   onPartGroupChange,
   onPartRename,
   onPartParentChange,
+  onRemovePartLink,
   onPartReorderByDrag,
   onGroupReorderByDrag,
   onDeletePart,
@@ -705,6 +707,19 @@ export default function PartsSidebar({
                 </option>
               ))}
             </select>
+            {selectedPart.parentId && (
+              <button
+                onClick={() => onRemovePartLink(selectedPart.id)}
+                disabled={selectedPartEffectiveLocked}
+                className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
+                  selectedPartEffectiveLocked
+                    ? "cursor-not-allowed border-zinc-800 text-zinc-700"
+                    : "border-zinc-700 text-zinc-400 hover:border-red-700 hover:text-red-400"
+                }`}
+              >
+                Remove link
+              </button>
+            )}
           </div>
 
           {parts.length > 1 && (

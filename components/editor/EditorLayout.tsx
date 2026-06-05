@@ -539,6 +539,17 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     }, parentName ? `Set follows: ${parentName}` : "Clear follows");
   }
 
+  function handleRemovePartLink(partId: string) {
+    const part = rig.parts.find((p) => p.id === partId);
+    if (!part) return;
+    if (part.parentId === null) return;
+    if (isPartEffectivelyLocked(part, rig.groups)) return;
+    commitRig({
+      ...rig,
+      parts: rig.parts.map((p) => (p.id === partId ? { ...p, parentId: null } : p)),
+    }, "Removed follows");
+  }
+
   function handlePolygonPointChange(
     partId: string,
     pointIndex: number,
@@ -978,6 +989,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onPartGroupChange={handlePartGroupChange}
           onPartRename={handlePartRename}
           onPartParentChange={handlePartParentChange}
+          onRemovePartLink={handleRemovePartLink}
           onPartReorderByDrag={handlePartReorderByDrag}
           onGroupReorderByDrag={handleGroupReorderByDrag}
           onDeletePart={handleDeletePart}
