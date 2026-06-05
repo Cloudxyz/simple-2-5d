@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Stage, Layer, Image as KonvaImage, Rect as KonvaRect, Circle as KonvaCircle, Line as KonvaLine } from "react-konva";
+import { Stage, Layer, Image as KonvaImage, Rect as KonvaRect, Circle as KonvaCircle, Line as KonvaLine, Group } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as StageType } from "konva/lib/Stage";
 import { findGroupById, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
@@ -295,6 +295,35 @@ function getDisplayMP(part: Part, allParts: Part[]): Point {
   return ancestors.length > 0
     ? applyAncestorTransform(part.movementPoint, ancestors)
     : part.movementPoint;
+}
+
+/**
+ * Computes the Konva Group transform (x, y, rotation) that maps image-local coordinates
+ * to world-space for a given part, including all ancestor rotations and depth offset.
+ *
+ * A source pixel at (u, v) placed inside a Group with this transform appears at:
+ *   world = R(rotation) * (u, v) + (x, y)
+ *
+ * This matches the existing outline math for both the native-Konva-rotation path and
+ * the inherited-ancestor-rotation path, verified by substituting (u,v) = polygon point.
+ */
+function computePartImageTransform(
+  part: Part,
+  allParts: Part[],
+  depthOffFn: DepthOffFn
+): { x: number; y: number; rotation: number } {
+  const ancestors = getAncestorChain(allParts, part.id);
+  const displayMP = ancestors.length > 0
+    ? applyAncestorTransform(part.movementPoint, ancestors)
+    : part.movementPoint;
+  // Transform the image origin (0,0) through the full ancestor chain then own rotation
+  const origin0 = ancestors.length > 0
+    ? applyAncestorTransform({ x: 0, y: 0 }, ancestors)
+    : { x: 0, y: 0 };
+  const rotated = rotatePoint(origin0, displayMP, part.rotation);
+  const { ox, oy } = depthOffFn(part);
+  const totalRotation = ancestors.reduce((sum, a) => sum + a.rotation, 0) + part.rotation;
+  return { x: rotated.x + ox, y: rotated.y + oy, rotation: totalRotation };
 }
 
 function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
@@ -890,6 +919,59 @@ export default function EditorCanvas({
               listening={false}
             />
           )}
+
+          {/* Image pieces — actual cropped/clipped source image per part, sorted by zIndex.
+               Each part gets a Group whose transform maps image-local coords to world-space,
+               with a clipFunc masking to the part's polygon or rect bounds. */}
+          {konvaImage && [...displayParts]
+            .filter((part) => isPartEffectivelyVisible(part, rig.groups))
+            .sort((a, b) => a.zIndex - b.zIndex)
+            .map((part) => {
+              const { x, y, rotation } = computePartImageTransform(part, displayParts, depthOff);
+              const iw = konvaImage.naturalWidth;
+              const ih = konvaImage.naturalHeight;
+              if (part.polygonPoints && part.polygonPoints.length >= 3) {
+                return (
+                  <Group
+                    key={`img-${part.id}`}
+                    x={x}
+                    y={y}
+                    rotation={rotation}
+                    clipFunc={(ctx) => {
+                      const pts = part.polygonPoints!;
+                      ctx.beginPath();
+                      for (let i = 0; i < pts.length; i++) {
+                        const pt =
+                          liveVertex?.partId === part.id && liveVertex.idx === i
+                            ? liveVertex.polygonPos
+                            : pts[i];
+                        if (i === 0) ctx.moveTo(pt.x, pt.y);
+                        else ctx.lineTo(pt.x, pt.y);
+                      }
+                      ctx.closePath();
+                    }}
+                    listening={false}
+                  >
+                    <KonvaImage image={konvaImage} x={0} y={0} width={iw} height={ih} listening={false} />
+                  </Group>
+                );
+              }
+              return (
+                <Group
+                  key={`img-${part.id}`}
+                  x={x}
+                  y={y}
+                  rotation={rotation}
+                  clipFunc={(ctx) => {
+                    const { bounds } = part;
+                    ctx.rect(bounds.x, bounds.y, bounds.width, bounds.height);
+                  }}
+                  listening={false}
+                >
+                  <KonvaImage image={konvaImage} x={0} y={0} width={iw} height={ih} listening={false} />
+                </Group>
+              );
+            })}
 
           {/* Saved parts — sorted ascending so higher zIndex renders on top.
                Parts with active ancestor rotation render using fully computed display points.
