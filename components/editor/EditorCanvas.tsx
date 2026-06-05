@@ -11,6 +11,7 @@ const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 0.15;
 const MIN_SELECTION_PX = 5;
+const MAX_ANCESTOR_DEPTH = 20;
 
 // Visual constants for the movement-point indicator (screen pixels)
 const PIVOT_RING_R = 6;
@@ -91,6 +92,59 @@ function rotatePoint(point: Point, pivot: Point, rotation: number): Point {
   };
 }
 
+/** Returns ancestor chain from root down to immediate parent (not including `partId` itself). */
+function getAncestorChain(parts: Part[], partId: string): Part[] {
+  const chain: Part[] = [];
+  const seen = new Set<string>();
+  let current = parts.find((p) => p.id === partId);
+  while (current?.parentId) {
+    if (seen.has(current.parentId)) break; // cycle guard
+    seen.add(current.parentId);
+    const parent = parts.find((p) => p.id === current!.parentId);
+    if (!parent || chain.length >= MAX_ANCESTOR_DEPTH) break;
+    chain.unshift(parent); // prepend → chain is root-first order
+    current = parent;
+  }
+  return chain;
+}
+
+/** Applies each ancestor's rotation (root first) to point `p`, respecting world-space pivots. */
+function applyAncestorTransform(p: Point, ancestors: Part[]): Point {
+  if (ancestors.length === 0) return p;
+  // Pre-compute each ancestor's movementPoint in world space
+  const worldMPs: Point[] = [];
+  for (let i = 0; i < ancestors.length; i++) {
+    let wmp = ancestors[i].movementPoint;
+    for (let j = 0; j < i; j++) {
+      wmp = rotatePoint(wmp, worldMPs[j], ancestors[j].rotation);
+    }
+    worldMPs.push(wmp);
+  }
+  let result = p;
+  for (let i = 0; i < ancestors.length; i++) {
+    result = rotatePoint(result, worldMPs[i], ancestors[i].rotation);
+  }
+  return result;
+}
+
+/** Inverse of applyAncestorTransform — world position → image-local. */
+function inverseAncestorTransform(p: Point, ancestors: Part[]): Point {
+  if (ancestors.length === 0) return p;
+  const worldMPs: Point[] = [];
+  for (let i = 0; i < ancestors.length; i++) {
+    let wmp = ancestors[i].movementPoint;
+    for (let j = 0; j < i; j++) {
+      wmp = rotatePoint(wmp, worldMPs[j], ancestors[j].rotation);
+    }
+    worldMPs.push(wmp);
+  }
+  let result = p;
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    result = rotatePoint(result, worldMPs[i], -ancestors[i].rotation);
+  }
+  return result;
+}
+
 function isPointOnSegment(point: Point, a: Point, b: Point): boolean {
   const cross = (point.y - a.y) * (b.x - a.x) - (point.x - a.x) * (b.y - a.y);
   if (Math.abs(cross) > 1e-6) return false;
@@ -120,7 +174,14 @@ function isPointInPolygon(point: Point, polygon: Point[]): boolean {
   return inside;
 }
 
-function isPointInPart(point: Point, part: Part): boolean {
+function isPointInPart(point: Point, part: Part, allParts?: Part[]): boolean {
+  const ancestors = allParts ? getAncestorChain(allParts, part.id) : [];
+
+  if (ancestors.length > 0 && ancestors.some((a) => a.rotation !== 0)) {
+    // With active inherited rotation: test against final display polygon
+    return isPointInPolygon(point, getPartDisplayPoints(part, allParts));
+  }
+
   const unrotatedPoint = inverseRotatePoint(point, part.movementPoint, part.rotation);
 
   if (part.polygonPoints && part.polygonPoints.length >= 3) {
@@ -143,25 +204,35 @@ function findTopmostVisiblePartAtPoint(parts: Part[], groups: LayerGroup[] | und
 
   for (const part of visibleParts) {
     if (!isPartEffectivelyLocked(part, groups)) {
-      if (isPointInPart(point, part)) return part;
+      if (isPointInPart(point, part, parts)) return part;
     }
   }
 
   return null;
 }
 
-function getPartDisplayPoints(part: Part): Point[] {
-  if (part.polygonPoints && part.polygonPoints.length >= 3) {
-    return part.polygonPoints.map((point) => rotatePoint(point, part.movementPoint, part.rotation));
-  }
+function getPartDisplayPoints(part: Part, allParts?: Part[]): Point[] {
+  const ancestors = allParts ? getAncestorChain(allParts, part.id) : [];
+  const displayMP = ancestors.length > 0
+    ? applyAncestorTransform(part.movementPoint, ancestors)
+    : part.movementPoint;
 
-  const { bounds } = part;
-  return [
-    { x: bounds.x, y: bounds.y },
-    { x: bounds.x + bounds.width, y: bounds.y },
-    { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
-    { x: bounds.x, y: bounds.y + bounds.height },
-  ].map((point) => rotatePoint(point, part.movementPoint, part.rotation));
+  const basePoints: Point[] = (part.polygonPoints && part.polygonPoints.length >= 3)
+    ? part.polygonPoints
+    : (() => {
+        const { bounds } = part;
+        return [
+          { x: bounds.x, y: bounds.y },
+          { x: bounds.x + bounds.width, y: bounds.y },
+          { x: bounds.x + bounds.width, y: bounds.y + bounds.height },
+          { x: bounds.x, y: bounds.y + bounds.height },
+        ];
+      })();
+
+  return basePoints.map((p) => {
+    const inherited = ancestors.length > 0 ? applyAncestorTransform(p, ancestors) : p;
+    return rotatePoint(inherited, displayMP, part.rotation);
+  });
 }
 
 function getAxisAlignedBounds(points: Point[]): BoundingBox | null {
@@ -384,7 +455,7 @@ export default function EditorCanvas({
     : [];
   const selectedGroupVisibleParts = selectedGroupParts.filter((part) => isPartEffectivelyVisible(part, rig.groups));
   const selectedGroupOutline = getAxisAlignedBounds(
-    selectedGroupVisibleParts.flatMap((part) => getPartDisplayPoints(part))
+    selectedGroupVisibleParts.flatMap((part) => getPartDisplayPoints(part, rig.parts))
   );
   const selectedGroupCanMove =
     !!selectedGroup &&
@@ -402,7 +473,7 @@ export default function EditorCanvas({
       if (withinOutline) return true;
     }
 
-    return selectedGroupVisibleParts.some((part) => isPointInPart(point, part));
+    return selectedGroupVisibleParts.some((part) => isPointInPart(point, part, rig.parts));
   }
 
   function handleWheel(e: KonvaEventObject<WheelEvent>) {
@@ -525,6 +596,11 @@ export default function EditorCanvas({
         return;
       }
       if (selPart?.polygonPoints && selPart.polygonPoints.length >= 3) {
+        // Block edge hover when pen editing is disabled due to active ancestor rotation
+        const selPartAncestors = getAncestorChain(rig.parts, selPart.id);
+        if (selPartAncestors.some((a) => a.rotation !== 0)) {
+          if (hoveredEdge) setHoveredEdge(null);
+        } else {
         const stage = stageRef.current;
         const pos = stage?.getPointerPosition();
         if (pos) {
@@ -581,6 +657,7 @@ export default function EditorCanvas({
         } else {
           setHoveredEdge(null);
         }
+        } // end else (no active ancestor rotation)
       } else if (hoveredEdge) {
         setHoveredEdge(null);
       }
@@ -702,8 +779,8 @@ export default function EditorCanvas({
           )}
 
           {/* Saved parts — sorted ascending so higher zIndex renders on top.
-               Polygon parts use KonvaLine (closed); rectangle parts use KonvaRect.
-               Both use the same x/offsetX rotation trick to pivot around movementPoint. */}
+               Parts with active ancestor rotation render using fully computed display points.
+               Others use Konva's native x/offsetX rotation trick for their local rotation. */}
           {[...rig.parts].sort((a, b) => a.zIndex - b.zIndex).map((part) => {
             if (!isPartEffectivelyVisible(part, rig.groups)) return null;
             const sel = part.id === selectedPartId;
@@ -711,6 +788,23 @@ export default function EditorCanvas({
             const stroke = sel ? "rgba(167,139,250,1)" : "rgba(139,92,246,0.7)";
             const fill = sel ? "rgba(139,92,246,0.18)" : "rgba(139,92,246,0.06)";
             const strokeWidth = sel ? 2 : 1;
+
+            // Render preview: apply inherited parent rotation transforms
+            const partAncestors = getAncestorChain(rig.parts, part.id);
+            if (partAncestors.some((a) => a.rotation !== 0)) {
+              const flatPts = getPartDisplayPoints(part, rig.parts).flatMap((p) => [p.x, p.y]);
+              return (
+                <KonvaLine
+                  key={part.id}
+                  points={flatPts}
+                  closed
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  strokeScaleEnabled={false}
+                  fill={fill}
+                />
+              );
+            }
 
             if (part.polygonPoints && part.polygonPoints.length >= 3) {
               // Substitute the live drag position for the vertex being moved
@@ -725,17 +819,16 @@ export default function EditorCanvas({
                   key={part.id}
                   points={flatPts}
                   // x/offsetX pattern: translate(mp) * rotate * translate(-mp)
-                  // — identical pivot mechanic to KonvaRect below
                   x={mp.x}
                   y={mp.y}
                   offsetX={mp.x}
                   offsetY={mp.y}
                   rotation={part.rotation}
                   closed
-                stroke={stroke}
-                strokeWidth={strokeWidth}
-                strokeScaleEnabled={false}
-                fill={fill}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  strokeScaleEnabled={false}
+                  fill={fill}
                 />
               );
             }
@@ -743,7 +836,6 @@ export default function EditorCanvas({
             return (
               <KonvaRect
                 key={part.id}
-                // Position at movement point so rotation pivots around it
                 x={mp.x}
                 y={mp.y}
                 offsetX={mp.x - part.bounds.x}
@@ -817,7 +909,9 @@ export default function EditorCanvas({
             </>
           )}
 
-          {/* Draggable vertex markers for the selected polygon part */}
+          {/* Vertex markers for the selected polygon part.
+               Read-only (dimmed, non-draggable) when an ancestor has active rotation — pen
+               editing is blocked in that state to prevent corrupt stored coordinates. */}
           {(() => {
             if (!selectedPartId) return null;
             const part = rig.parts.find((p) => p.id === selectedPartId && isPartEffectivelyVisible(p, rig.groups));
@@ -826,51 +920,58 @@ export default function EditorCanvas({
             const rad = (part.rotation * Math.PI) / 180;
             const cos = Math.cos(rad);
             const sin = Math.sin(rad);
+
+            const vtxAncestors = getAncestorChain(rig.parts, part.id);
+            const hasActiveAncestorRot = vtxAncestors.some((a) => a.rotation !== 0);
+            // Pre-compute display positions for all vertices when ancestor rotation is active
+            const inheritedPts = hasActiveAncestorRot ? getPartDisplayPoints(part, rig.parts) : null;
+
             return (
               <>
                 {part.polygonPoints.map((pt, i) => {
-                  const dx = pt.x - mp.x;
-                  const dy = pt.y - mp.y;
-                  const defaultX = cos * dx - sin * dy + mp.x;
-                  const defaultY = sin * dx + cos * dy + mp.y;
-                  // During drag, use the live stage position so the prop matches what
-                  // Konva already moved the node to — prevents react-konva snap-back
-                  const isLive = liveVertex?.partId === part.id && liveVertex.idx === i;
-                  const cx = isLive ? liveVertex!.stagePos.x : defaultX;
-                  const cy = isLive ? liveVertex!.stagePos.y : defaultY;
-                  const isSelected = activeTool === "pen" && selectedPolygonPointIdx === i;
+                  let cx: number, cy: number;
+                  if (inheritedPts) {
+                    cx = inheritedPts[i].x;
+                    cy = inheritedPts[i].y;
+                  } else {
+                    const dx = pt.x - mp.x;
+                    const dy = pt.y - mp.y;
+                    const defaultX = cos * dx - sin * dy + mp.x;
+                    const defaultY = sin * dx + cos * dy + mp.y;
+                    // During drag, use the live stage position — prevents react-konva snap-back
+                    const isLive = liveVertex?.partId === part.id && liveVertex.idx === i;
+                    cx = isLive ? liveVertex!.stagePos.x : defaultX;
+                    cy = isLive ? liveVertex!.stagePos.y : defaultY;
+                  }
+
+                  const canEdit = !hasActiveAncestorRot && !isPartEffectivelyLocked(part, rig.groups);
+                  const isSelected = canEdit && activeTool === "pen" && selectedPolygonPointIdx === i;
                   return (
                     <KonvaCircle
                       key={`vtx-${part.id}-${i}`}
                       x={cx}
                       y={cy}
                       radius={isSelected ? 6 / sc : 4 / sc}
-                      fill={isSelected ? "rgba(255,255,255,1)" : "rgba(167,139,250,0.95)"}
+                      fill={hasActiveAncestorRot ? "rgba(167,139,250,0.45)" : (isSelected ? "rgba(255,255,255,1)" : "rgba(167,139,250,0.95)")}
                       stroke={isSelected ? "rgba(167,139,250,1)" : "rgba(255,255,255,0.5)"}
                       strokeWidth={isSelected ? 2 : 1}
                       strokeScaleEnabled={false}
-                      draggable={activeTool === "pen" && !isPartEffectivelyLocked(part, rig.groups)}
-                      onMouseEnter={() => { if (activeTool === "pen" && !isPartEffectivelyLocked(part, rig.groups)) setVertexHovered(true); }}
+                      draggable={canEdit && activeTool === "pen"}
+                      onMouseEnter={() => { if (canEdit && activeTool === "pen") setVertexHovered(true); }}
                       onMouseLeave={() => setVertexHovered(false)}
                       onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
-                        // Only block bubbling in pen mode so select-tool clicks
-                        // still propagate to the polygon shape and select it
-                        if (activeTool === "pen" && !isPartEffectivelyLocked(part, rig.groups)) e.cancelBubble = true;
+                        if (canEdit && activeTool === "pen") e.cancelBubble = true;
                       }}
                       onClick={(e: KonvaEventObject<MouseEvent>) => {
-                        if (activeTool !== "pen" || isPartEffectivelyLocked(part, rig.groups)) return;
+                        if (!canEdit || activeTool !== "pen") return;
                         e.cancelBubble = true;
-                        // Toggle: clicking the already-selected vertex deselects it
                         setSelectedPolygonPointIdx(selectedPolygonPointIdx === i ? null : i);
                       }}
                       onDragMove={(e) => {
-                        if (activeTool !== "pen" || isPartEffectivelyLocked(part, rig.groups)) return;
+                        if (!canEdit || activeTool !== "pen") return;
                         e.cancelBubble = true;
                         const sx = e.target.x();
                         const sy = e.target.y();
-                        // Inverse-rotate dragged layer position → unrotated polygon coords
-                        // Forward: screen = R(pt - mp) + mp
-                        // Inverse: pt = R^T(screen - mp) + mp  (R^T = [cos,sin;-sin,cos])
                         const rdx = sx - mp.x;
                         const rdy = sy - mp.y;
                         setLiveVertex({
@@ -884,7 +985,7 @@ export default function EditorCanvas({
                         });
                       }}
                       onDragEnd={(e) => {
-                        if (activeTool !== "pen" || isPartEffectivelyLocked(part, rig.groups)) return;
+                        if (!canEdit || activeTool !== "pen") return;
                         e.cancelBubble = true;
                         const sx = e.target.x();
                         const sy = e.target.y();
@@ -976,26 +1077,28 @@ export default function EditorCanvas({
             );
           })()}
 
-          {/* Movement point indicator — shown whenever a visible part is selected */}
+          {/* Movement point indicator — shown whenever a visible part is selected.
+               Displayed at the inherited world position so it stays "on" the rendered part.
+               Drag end inverse-transforms back to image-local before storing. */}
           {selectedPart && (() => {
-            const mp = selectedPart.movementPoint;
+            const mpAncestors = getAncestorChain(rig.parts, selectedPart.id);
+            // Display the pivot at its world-space position (accounts for parent rotation)
+            const dmp = applyAncestorTransform(selectedPart.movementPoint, mpAncestors);
             const isPointTool = activeTool === "point";
             const color = isPointTool ? "rgba(251,191,36,1)" : "rgba(251,191,36,0.55)";
             const fillColor = isPointTool ? "rgba(251,191,36,0.2)" : "rgba(251,191,36,0.08)";
 
             return (
               <>
-                {/* Horizontal crosshair arm */}
                 <KonvaLine
-                  points={[mp.x - pivotArm, mp.y, mp.x + pivotArm, mp.y]}
+                  points={[dmp.x - pivotArm, dmp.y, dmp.x + pivotArm, dmp.y]}
                   stroke={color}
                   strokeWidth={1.5}
                   strokeScaleEnabled={false}
                   listening={false}
                 />
-                {/* Vertical crosshair arm */}
                 <KonvaLine
-                  points={[mp.x, mp.y - pivotArm, mp.x, mp.y + pivotArm]}
+                  points={[dmp.x, dmp.y - pivotArm, dmp.x, dmp.y + pivotArm]}
                   stroke={color}
                   strokeWidth={1.5}
                   strokeScaleEnabled={false}
@@ -1003,8 +1106,8 @@ export default function EditorCanvas({
                 />
                 {/* Ring — draggable in point-tool mode */}
                 <KonvaCircle
-                  x={mp.x}
-                  y={mp.y}
+                  x={dmp.x}
+                  y={dmp.y}
                   radius={pivotR}
                   fill={fillColor}
                   stroke={color}
@@ -1012,15 +1115,19 @@ export default function EditorCanvas({
                   strokeScaleEnabled={false}
                   draggable={isPointTool && !isPartEffectivelyLocked(selectedPart, rig.groups)}
                   onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
-                    // Always stop bubbling so pan/selection don't fire
                     e.cancelBubble = true;
                   }}
                   onDragEnd={(e) => {
                     e.cancelBubble = true;
                     const node = e.target;
+                    const worldPos: Point = { x: Math.round(node.x()), y: Math.round(node.y()) };
+                    // Inverse-transform world drag position → image-local for storage
+                    const stored = mpAncestors.length > 0
+                      ? inverseAncestorTransform(worldPos, mpAncestors)
+                      : worldPos;
                     onMovementPointChange(selectedPart.id, {
-                      x: Math.round(node.x()),
-                      y: Math.round(node.y()),
+                      x: Math.round(stored.x),
+                      y: Math.round(stored.y),
                     });
                   }}
                 />
