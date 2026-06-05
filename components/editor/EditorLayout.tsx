@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import EditorCanvas from "./EditorCanvas";
 import PartsSidebar from "./PartsSidebar";
@@ -24,6 +24,21 @@ interface StageTransform {
 
 type SaveStatus = "idle" | "saved" | "empty" | "error";
 type LayerOrderBlock = { type: "group" | "part"; id: string; partIds: string[] };
+
+const LAST_SAVED_KEY = "simple2_5d_project_last_saved_at";
+
+function formatSaveLabel(lastSavedAt: number | null, hasUnsavedChanges: boolean, now: number): string {
+  if (!hasUnsavedChanges && lastSavedAt !== null) {
+    const d = new Date(lastSavedAt);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `Last saved: ${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  if (lastSavedAt === null) return "Not saved";
+  const mins = Math.floor((now - lastSavedAt) / 60_000);
+  if (mins < 1) return "Unsaved changes less than 1 minute ago";
+  if (mins === 1) return "Unsaved changes 1 minute ago";
+  return `Unsaved changes ${mins} minutes ago`;
+}
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
@@ -94,13 +109,37 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   const [penClosed, setPenClosed] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    try { const v = localStorage.getItem(LAST_SAVED_KEY); return v ? parseInt(v, 10) : null; } catch { return null; }
+  });
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  // Prevents marking unsaved during the initial project load
+  const initDoneRef = useRef(false);
 
   // Auto-load saved project on mount — skipped when freshStart is set (?new=1)
   useEffect(() => {
-    if (freshStart) return;
-    const saved = loadProject();
-    if (saved) setRig(saved);
+    if (!freshStart) {
+      const saved = loadProject();
+      if (saved) setRig(saved);
+    }
+    // Delay so the rig change effect above skips the initial load render
+    const t = setTimeout(() => { initDoneRef.current = true; }, 0);
+    return () => clearTimeout(t);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mark unsaved whenever rig mutates after the initial load has settled
+  useEffect(() => {
+    if (!initDoneRef.current) return;
+    setHasUnsavedChanges(true);
+  }, [rig]);
+
+  // Drive relative-time updates for the save label (every 60 s is enough for minute granularity)
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Auto-fade save status after 2.5 s
   useEffect(() => {
@@ -150,6 +189,13 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   function handleSave() {
     const result = saveProject(rig);
     setSaveStatus(result === "ok" ? "saved" : result === "empty" ? "empty" : "error");
+    if (result === "ok") {
+      const now = Date.now();
+      setLastSavedAt(now);
+      setHasUnsavedChanges(false);
+      setNowTick(now);
+      try { localStorage.setItem(LAST_SAVED_KEY, String(now)); } catch {}
+    }
   }
 
   function handleClearRequest() {
@@ -158,12 +204,15 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
   function handleConfirmClear() {
     clearProject();
+    try { localStorage.removeItem(LAST_SAVED_KEY); } catch {}
     setRig({ name: characterName, parts: [], imageDataUrl: null, groups: [] });
     setSelectedPartId(null);
     setSelectedGroupId(null);
     setStageTransform({ x: 0, y: 0, scale: 1 });
     setShowClearConfirm(false);
     setSaveStatus("idle");
+    setLastSavedAt(null);
+    setHasUnsavedChanges(false);
   }
 
   function handleSelectionComplete(bounds: BoundingBox) {
@@ -714,6 +763,11 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
                 >
                   Clear project
                 </button>
+              )}
+              {hasContent && (
+                <span className="text-xs text-zinc-600 select-none">
+                  {formatSaveLabel(lastSavedAt, hasUnsavedChanges, nowTick)}
+                </span>
               )}
               <button
                 onClick={handleSave}
