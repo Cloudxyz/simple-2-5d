@@ -540,15 +540,22 @@ export default function EditorCanvas({
     };
   }
 
+  // During animation preview, overlay preview rotations without mutating rig
+  const displayParts = previewRotations
+    ? rig.parts.map((p) =>
+        previewRotations[p.id] !== undefined ? { ...p, rotation: previewRotations[p.id] } : p
+      )
+    : rig.parts;
+
   const selectedGroup = selectedGroupId
     ? findGroupById(rig.groups, selectedGroupId)
     : null;
   const selectedGroupParts = selectedGroupId
-    ? rig.parts.filter((part) => part.groupId === selectedGroupId)
+    ? displayParts.filter((part) => part.groupId === selectedGroupId)
     : [];
   const selectedGroupVisibleParts = selectedGroupParts.filter((part) => isPartEffectivelyVisible(part, rig.groups));
   const selectedGroupOutline = getAxisAlignedBounds(
-    selectedGroupVisibleParts.flatMap((part) => getPartDisplayPoints(part, rig.parts))
+    selectedGroupVisibleParts.flatMap((part) => getPartDisplayPoints(part, displayParts))
   );
   const selectedGroupCanMove =
     !!selectedGroup &&
@@ -566,7 +573,7 @@ export default function EditorCanvas({
       if (withinOutline) return true;
     }
 
-    return selectedGroupVisibleParts.some((part) => isPointInPart(point, part, rig.parts));
+    return selectedGroupVisibleParts.some((part) => isPointInPart(point, part, displayParts));
   }
 
   function handleWheel(e: KonvaEventObject<WheelEvent>) {
@@ -657,7 +664,12 @@ export default function EditorCanvas({
       const pos = stage.getPointerPosition();
       if (!pos) return;
       const imgPos = toImageCoords(pos.x, pos.y);
-      const candidate = findTopmostVisiblePartAtPoint(rig.parts, rig.groups, imgPos);
+      const candidate = findTopmostVisiblePartAtPoint(
+        displayParts,
+        rig.groups,
+        imgPos,
+        preview2d?.enabled ? depthOff : undefined
+      );
       const hoverTargetId =
         candidate && candidate.id !== selectedPartId && !isPartEffectivelyLocked(candidate, rig.groups)
           ? candidate.id
@@ -698,7 +710,7 @@ export default function EditorCanvas({
     // Edge hover for polygon point insertion — pen tool only, not while drawing a new polygon
     if (activeTool === "pen" && !liveVertex && penPoints.length === 0) {
       const selPart = selectedPartId
-        ? rig.parts.find((p) => p.id === selectedPartId && isPartEffectivelyVisible(p, rig.groups))
+        ? displayParts.find((p) => p.id === selectedPartId && isPartEffectivelyVisible(p, rig.groups))
         : null;
       if (isPartEffectivelyLocked(selPart, rig.groups)) {
         if (hoveredEdge) setHoveredEdge(null);
@@ -706,7 +718,7 @@ export default function EditorCanvas({
       }
       if (selPart?.polygonPoints && selPart.polygonPoints.length >= 3) {
         // Block edge hover when pen editing is disabled due to active ancestor rotation
-        const selPartAncestors = getAncestorChain(rig.parts, selPart.id);
+        const selPartAncestors = getAncestorChain(displayParts, selPart.id);
         if (selPartAncestors.some((a) => a.rotation !== 0)) {
           if (hoveredEdge) setHoveredEdge(null);
         } else {
@@ -810,7 +822,7 @@ export default function EditorCanvas({
         });
       } else {
         const hitPart = findTopmostVisiblePartAtPoint(
-          rig.parts,
+          displayParts,
           rig.groups,
           dragCurrent,
           preview2d?.enabled ? depthOff : undefined
@@ -859,13 +871,6 @@ export default function EditorCanvas({
     : activeTool === "select" ? "crosshair"
     : activeTool === "pen" ? "crosshair"
     : "default";
-
-  // During animation preview, overlay preview rotations without mutating rig
-  const displayParts = previewRotations
-    ? rig.parts.map((p) =>
-        previewRotations[p.id] !== undefined ? { ...p, rotation: previewRotations[p.id] } : p
-      )
-    : rig.parts;
 
   // The part whose pivot we show — must be selected and visible
   const selectedPart = displayParts.find(
