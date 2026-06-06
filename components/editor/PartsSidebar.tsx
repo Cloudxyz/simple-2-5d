@@ -55,13 +55,30 @@ interface PartsSidebarProps {
   onRotateRight: (id: string) => void;
   onResetRotation: (id: string) => void;
   poses: SavedPose[];
-  onSavePose: () => void;
+  poseMixFromId: string;
+  poseMixToId: string;
+  poseMixAmount: number;
+  onSetPoseMixFrom: (id: string) => void;
+  onSetPoseMixTo: (id: string) => void;
+  onSetPoseMixAmount: (v: number) => void;
+  onApplyPoseMix: () => void;
+  onResetPoseMix: () => void;
+  onSavePose: (name: string) => void;
   onApplyPose: (poseId: string) => void;
   onRenamePose: (poseId: string, name: string) => void;
   onDeletePose: (poseId: string) => void;
   onChangeDepth: (partId: string, depth: number) => void;
+  onSetMeshEnabled: (partId: string, enabled: boolean) => void;
+  onSetMeshTurnX: (partId: string, v: number) => void;
+  onSetMeshTurnY: (partId: string, v: number) => void;
+  onSetMeshCurve: (partId: string, v: number) => void;
+  onResetMesh: (partId: string) => void;
   preview2d: Preview2d;
   onSet2dPreview: (p: Preview2d) => void;
+  previewRotationX: number;
+  previewRotationY: number;
+  onSetPreviewRotationX: (v: number) => void;
+  onSetPreviewRotationY: (v: number) => void;
   showSourceImage: boolean;
   sourceImageOpacity: number;
   onSetShowSourceImage: (show: boolean) => void;
@@ -142,13 +159,30 @@ export default function PartsSidebar({
   onRotateRight,
   onResetRotation,
   poses,
+  poseMixFromId,
+  poseMixToId,
+  poseMixAmount,
+  onSetPoseMixFrom,
+  onSetPoseMixTo,
+  onSetPoseMixAmount,
+  onApplyPoseMix,
+  onResetPoseMix,
   onSavePose,
   onApplyPose,
   onRenamePose,
   onDeletePose,
   onChangeDepth,
+  onSetMeshEnabled,
+  onSetMeshTurnX,
+  onSetMeshTurnY,
+  onSetMeshCurve,
+  onResetMesh,
   preview2d,
   onSet2dPreview,
+  previewRotationX,
+  previewRotationY,
+  onSetPreviewRotationX,
+  onSetPreviewRotationY,
   showSourceImage,
   sourceImageOpacity,
   onSetShowSourceImage,
@@ -163,6 +197,7 @@ export default function PartsSidebar({
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const historyListRef = useRef<HTMLDivElement>(null);
   const [posesExpanded, setPosesExpanded] = useState(true);
+  const [newPoseName, setNewPoseName] = useState("");
   const [editingPoseId, setEditingPoseId] = useState<string | null>(null);
   const [editingPoseName, setEditingPoseName] = useState("");
   const [previewFromId, setPreviewFromId] = useState<string>("");
@@ -881,7 +916,7 @@ export default function PartsSidebar({
 
           <div className="space-y-1">
             <div className="flex items-center justify-between">
-              <p className="text-xs text-zinc-600">Depth</p>
+              <p className="text-xs text-zinc-600">Profundidad</p>
               <span className="text-xs text-zinc-500 tabular-nums">{selectedPart.depth ?? 0}</span>
             </div>
             <div className="flex items-center gap-2">
@@ -966,6 +1001,77 @@ export default function PartsSidebar({
         </div>
       )}
 
+      {/* Volume / mesh deformation panel — shows when a part is selected */}
+      {selectedPart && (
+        <div className="border-t border-zinc-800 flex-shrink-0 px-3 py-2 space-y-2">
+          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Apariencia con volumen</p>
+          <label className="flex items-center justify-between gap-3 text-[11px] text-zinc-400 cursor-pointer">
+            <span>Activar volumen</span>
+            <input
+              type="checkbox"
+              checked={selectedPart.meshEnabled ?? false}
+              disabled={selectedPartEffectiveLocked}
+              onChange={(e) => onSetMeshEnabled(selectedPart.id, e.target.checked)}
+              className="accent-violet-500"
+            />
+          </label>
+          {(selectedPart.meshEnabled) && (
+            <>
+              <div className="space-y-0.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-zinc-600">Giro horizontal</span>
+                  <span className="text-[11px] text-zinc-500 tabular-nums">{selectedPart.meshTurnX ?? 0}</span>
+                </div>
+                <input
+                  type="range" min={-100} max={100} step={1}
+                  value={selectedPart.meshTurnX ?? 0}
+                  disabled={selectedPartEffectiveLocked}
+                  onChange={(e) => onSetMeshTurnX(selectedPart.id, parseInt(e.target.value, 10))}
+                  className="w-full accent-violet-500 disabled:opacity-40"
+                />
+              </div>
+              <div className="space-y-0.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-zinc-600">Giro vertical</span>
+                  <span className="text-[11px] text-zinc-500 tabular-nums">{selectedPart.meshTurnY ?? 0}</span>
+                </div>
+                <input
+                  type="range" min={-100} max={100} step={1}
+                  value={selectedPart.meshTurnY ?? 0}
+                  disabled={selectedPartEffectiveLocked}
+                  onChange={(e) => onSetMeshTurnY(selectedPart.id, parseInt(e.target.value, 10))}
+                  className="w-full accent-violet-500 disabled:opacity-40"
+                />
+              </div>
+              <div className="space-y-0.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-zinc-600">Curvatura</span>
+                  <span className="text-[11px] text-zinc-500 tabular-nums">{selectedPart.meshCurve ?? 0}</span>
+                </div>
+                <input
+                  type="range" min={-100} max={100} step={1}
+                  value={selectedPart.meshCurve ?? 0}
+                  disabled={selectedPartEffectiveLocked}
+                  onChange={(e) => onSetMeshCurve(selectedPart.id, parseInt(e.target.value, 10))}
+                  className="w-full accent-violet-500 disabled:opacity-40"
+                />
+              </div>
+              <button
+                onClick={() => onResetMesh(selectedPart.id)}
+                disabled={selectedPartEffectiveLocked || (
+                  (selectedPart.meshTurnX ?? 0) === 0 &&
+                  (selectedPart.meshTurnY ?? 0) === 0 &&
+                  (selectedPart.meshCurve ?? 0) === 0
+                )}
+                className="text-[11px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Reset
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Poses panel */}
       <div className="border-t border-zinc-800 flex-shrink-0">
         <button
@@ -977,16 +1083,29 @@ export default function PartsSidebar({
         </button>
         {posesExpanded && (
           <div className="border-t border-zinc-800/60">
-            <div className="px-3 py-1.5">
+            <div className="px-3 py-1.5 flex gap-1.5">
+              <input
+                type="text"
+                placeholder="Nombre de pose…"
+                value={newPoseName}
+                onChange={(e) => setNewPoseName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    onSavePose(newPoseName);
+                    setNewPoseName("");
+                  }
+                }}
+                className="flex-1 min-w-0 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] text-zinc-300 placeholder-zinc-700 outline-none hover:border-zinc-700 focus:border-violet-500"
+              />
               <button
-                onClick={onSavePose}
-                className="w-full text-xs rounded border border-zinc-700 px-2 py-1 text-zinc-400 hover:border-violet-600 hover:text-violet-300 transition-colors"
+                onClick={() => { onSavePose(newPoseName); setNewPoseName(""); }}
+                className="flex-shrink-0 text-[11px] rounded border border-zinc-700 px-2 py-1 text-zinc-400 hover:border-violet-600 hover:text-violet-300 transition-colors"
               >
-                + Save pose
+                Guardar pose
               </button>
             </div>
             {poses.length === 0 ? (
-              <p className="px-3 pb-2 text-[11px] text-zinc-600">No poses saved yet.</p>
+              <p className="px-3 pb-2 text-[11px] text-zinc-600">No hay poses guardadas.</p>
             ) : (
               <ul className="pb-1">
                 {poses.map((pose) => (
@@ -1020,32 +1139,90 @@ export default function PartsSidebar({
                     )}
                     <button
                       onClick={() => onApplyPose(pose.id)}
-                      title="Apply this pose"
+                      title="Aplicar pose"
                       className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-violet-600 hover:text-violet-300 transition-colors"
                     >
-                      Apply
+                      Aplicar
                     </button>
                     <button
                       onClick={() => {
                         setEditingPoseId(pose.id);
                         setEditingPoseName(pose.name);
                       }}
-                      title="Rename pose"
+                      title="Renombrar pose"
                       className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-zinc-300 transition-colors opacity-0 group-hover:opacity-100"
                     >
                       ✎
                     </button>
                     <button
                       onClick={() => onDeletePose(pose.id)}
-                      title="Delete pose"
+                      title="Eliminar pose"
                       className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-red-700 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
                     >
-                      ✕
+                      Eliminar
                     </button>
                   </li>
                 ))}
               </ul>
             )}
+          {poses.length >= 2 && (
+            <div className="border-t border-zinc-800/60 px-3 py-2 space-y-1.5">
+              <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Mezcla de poses</p>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-zinc-600 w-16 flex-shrink-0">Pose inicial</span>
+                <select
+                  value={poseMixFromId}
+                  onChange={(e) => onSetPoseMixFrom(e.target.value)}
+                  className="flex-1 min-w-0 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 outline-none hover:border-zinc-700 focus:border-violet-500"
+                >
+                  <option value="">—</option>
+                  {poses.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-zinc-600 w-16 flex-shrink-0">Pose final</span>
+                <select
+                  value={poseMixToId}
+                  onChange={(e) => onSetPoseMixTo(e.target.value)}
+                  className="flex-1 min-w-0 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 outline-none hover:border-zinc-700 focus:border-violet-500"
+                >
+                  <option value="">—</option>
+                  {poses.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-zinc-600 w-16 flex-shrink-0">Mezcla</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={poseMixAmount}
+                  onChange={(e) => onSetPoseMixAmount(parseInt(e.target.value, 10))}
+                  className="flex-1 accent-violet-500"
+                />
+                <span className="text-[11px] text-zinc-500 tabular-nums w-7 text-right">
+                  {poseMixAmount}
+                </span>
+              </div>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={onApplyPoseMix}
+                  disabled={!poseMixFromId || !poseMixToId}
+                  className="flex-1 text-[11px] rounded border border-zinc-700 px-2 py-1 text-zinc-400 hover:border-violet-600 hover:text-violet-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  Aplicar mezcla
+                </button>
+                <button
+                  onClick={onResetPoseMix}
+                  disabled={!poseMixFromId && !poseMixToId && poseMixAmount === 0}
+                  className="text-[11px] rounded border border-zinc-700 px-2 py-1 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                >
+                  Reset mezcla
+                </button>
+              </div>
+            </div>
+          )}
           </div>
         )}
       </div>
@@ -1236,6 +1413,67 @@ export default function PartsSidebar({
             </div>
           </>
         )}
+      </div>
+
+      {/* Vista 2.5D panel */}
+      <div className="border-t border-zinc-800 flex-shrink-0 px-3 py-2 space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Vista 2.5D</p>
+          <button
+            onClick={() => { onSetPreviewRotationX(0); onSetPreviewRotationY(0); }}
+            disabled={previewRotationX === 0 && previewRotationY === 0}
+            className="text-[11px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          >
+            Reset
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-zinc-600 w-16 flex-shrink-0">Giro horiz.</span>
+          <input
+            type="range"
+            min={-45}
+            max={45}
+            step={1}
+            value={previewRotationY}
+            onChange={(e) => onSetPreviewRotationY(parseInt(e.target.value, 10))}
+            className="flex-1 accent-violet-500"
+          />
+          <span className="text-[11px] text-zinc-500 tabular-nums w-7 text-right">
+            {previewRotationY}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-zinc-600 w-16 flex-shrink-0">Giro vert.</span>
+          <input
+            type="range"
+            min={-45}
+            max={45}
+            step={1}
+            value={previewRotationX}
+            onChange={(e) => onSetPreviewRotationX(parseInt(e.target.value, 10))}
+            className="flex-1 accent-violet-500"
+          />
+          <span className="text-[11px] text-zinc-500 tabular-nums w-7 text-right">
+            {previewRotationX}
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {([
+            { label: "Frontal",   rx: 0,   ry: 0   },
+            { label: "Izquierda", rx: 0,   ry: -35 },
+            { label: "Derecha",   rx: 0,   ry: 35  },
+            { label: "Arriba",    rx: -25, ry: 0   },
+            { label: "Abajo",     rx: 25,  ry: 0   },
+          ] as const).map(({ label, rx, ry }) => (
+            <button
+              key={label}
+              onClick={() => { onSetPreviewRotationX(rx); onSetPreviewRotationY(ry); }}
+              className="text-[11px] px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="border-t border-zinc-800 flex-shrink-0 px-3 py-2 space-y-2">

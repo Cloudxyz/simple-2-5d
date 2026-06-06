@@ -53,8 +53,12 @@ export function loadProject(): CharacterRig | null {
       rotation: (p as { rotation?: number }).rotation ?? 0,
       depth: (p as { depth?: number }).depth ?? 0,
       polygonPoints: (p as { polygonPoints?: import("@/types/rig").Point[] | null }).polygonPoints ?? null,
+      meshEnabled: (p as { meshEnabled?: boolean }).meshEnabled ?? false,
+      meshTurnX: (p as { meshTurnX?: number }).meshTurnX ?? 0,
+      meshTurnY: (p as { meshTurnY?: number }).meshTurnY ?? 0,
+      meshCurve: (p as { meshCurve?: number }).meshCurve ?? 0,
     }));
-    rig.poses = rig.poses ?? [];
+    rig.poses = (rig.poses ?? []).filter((p) => Array.isArray((p as { parts?: unknown }).parts));
     rig.timeline = rig.timeline ?? [];
     return rig;
   } catch {

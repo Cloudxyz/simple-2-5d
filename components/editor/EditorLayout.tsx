@@ -9,7 +9,7 @@ import Toolbar from "./Toolbar";
 import NamePartDialog from "./NamePartDialog";
 import { saveProject, loadProject, clearProject } from "@/lib/storage";
 import { findGroupById, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
-import type { BoundingBox, CharacterRig, LayerGroup, Part, SavedPose, TimelineStep } from "@/types/rig";
+import type { BoundingBox, CharacterRig, LayerGroup, Part, SavedPose, SavedPosePart, TimelineStep } from "@/types/rig";
 
 interface Preview2d {
   enabled: boolean;
@@ -39,6 +39,54 @@ type SaveStatus = "idle" | "saved" | "empty" | "error";
 type LayerOrderBlock = { type: "group" | "part"; id: string; partIds: string[] };
 
 const LAST_SAVED_KEY = "simple2_5d_project_last_saved_at";
+
+function lerpNum(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function computePoseMix(
+  parts: Part[],
+  poses: SavedPose[],
+  fromId: string,
+  toId: string,
+  amount: number
+): Part[] {
+  const t = amount / 100;
+  const fromPose = poses.find((p) => p.id === fromId);
+  const toPose = poses.find((p) => p.id === toId);
+  if (!fromPose || !toPose) return parts;
+  const fromMap = new Map(fromPose.parts.map((pp) => [pp.partId, pp]));
+  const toMap = new Map(toPose.parts.map((pp) => [pp.partId, pp]));
+  return parts.map((part) => {
+    const from = fromMap.get(part.id);
+    const to = toMap.get(part.id);
+    if (!from || !to) return part;
+    const bounds = {
+      x: lerpNum(from.bounds.x, to.bounds.x, t),
+      y: lerpNum(from.bounds.y, to.bounds.y, t),
+      width: lerpNum(from.bounds.width, to.bounds.width, t),
+      height: lerpNum(from.bounds.height, to.bounds.height, t),
+    };
+    const movementPoint = {
+      x: lerpNum(from.movementPoint.x, to.movementPoint.x, t),
+      y: lerpNum(from.movementPoint.y, to.movementPoint.y, t),
+    };
+    const rotation = lerpNum(from.rotation, to.rotation, t);
+    const depth = lerpNum(from.depth ?? 0, to.depth ?? 0, t);
+    const fp = from.polygonPoints ?? null;
+    const tp = to.polygonPoints ?? null;
+    let polygonPoints: import("@/types/rig").Point[] | null;
+    if (fp && tp && fp.length === tp.length && fp.length >= 3) {
+      polygonPoints = fp.map((fpt, i) => ({
+        x: lerpNum(fpt.x, tp[i].x, t),
+        y: lerpNum(fpt.y, tp[i].y, t),
+      }));
+    } else {
+      polygonPoints = t >= 1 ? tp : fp;
+    }
+    return { ...part, bounds, movementPoint, rotation, depth, polygonPoints };
+  });
+}
 
 interface HistoryEntry {
   id: string;
@@ -180,6 +228,11 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
   // Animation preview — transient, never saved or committed to history
   const [previewRotations, setPreviewRotations] = useState<Record<string, number> | null>(null);
+
+  // Pose mix — transient preview interpolation, never saved
+  const [poseMixFromId, setPoseMixFromId] = useState("");
+  const [poseMixToId, setPoseMixToId] = useState("");
+  const [poseMixAmount, setPoseMixAmount] = useState(0);
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
   const previewRafRef = useRef<number | null>(null);
   const previewConfigRef = useRef<{
@@ -197,6 +250,8 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   } | null>(null);
 
   const [preview2d, setPreview2d] = useState<Preview2d>({ enabled: false, viewX: 0, viewY: 0, strength: 0.25 });
+  const [previewRotationX, setPreviewRotationX] = useState(0);
+  const [previewRotationY, setPreviewRotationY] = useState(0);
   const [sourceImagePreview, setSourceImagePreview] = useState<SourceImagePreview>({
     showSourceImage: true,
     sourceImageOpacity: 0.35,
@@ -412,6 +467,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
       isVisible: true,
       isLocked: false,
       rotation: 0,
+      depth: 0,
       polygonPoints: penClosed && penPoints.length >= 3 ? [...penPoints] : null,
     };
     commitRig({ ...rig, parts: [...rig.parts, newPart] }, `Create part: ${partName}`);
@@ -790,32 +846,48 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     }, "Moved rotation point");
   }
 
-  function handleSavePose() {
+  function handleSavePose(name: string) {
+    if (rig.parts.length === 0) return;
     const existingPoses = rig.poses ?? [];
-    const usedNums = existingPoses
-      .map((p) => { const m = p.name.match(/^Pose (\d+)$/); return m ? parseInt(m[1], 10) : 0; })
-      .filter((n) => n > 0);
-    const nextNum = usedNums.length > 0 ? Math.max(...usedNums) + 1 : 1;
-    const rotations: Record<string, number> = {};
-    for (const part of rig.parts) rotations[part.id] = part.rotation;
-    const newPose: SavedPose = {
-      id: crypto.randomUUID(),
-      name: `Pose ${nextNum}`,
-      rotations,
-      createdAt: Date.now(),
-    };
+    const trimmed = name.trim();
+    let finalName = trimmed;
+    if (!finalName) {
+      const usedNums = existingPoses
+        .map((p) => { const m = p.name.match(/^Pose (\d+)$/); return m ? parseInt(m[1], 10) : 0; })
+        .filter((n) => n > 0);
+      const nextNum = usedNums.length > 0 ? Math.max(...usedNums) + 1 : 1;
+      finalName = `Pose ${nextNum}`;
+    }
+    const parts: SavedPosePart[] = rig.parts.map((p) => ({
+      partId: p.id,
+      bounds: { ...p.bounds },
+      movementPoint: { ...p.movementPoint },
+      polygonPoints: p.polygonPoints ? p.polygonPoints.map((pt) => ({ ...pt })) : null,
+      rotation: p.rotation,
+      depth: p.depth ?? 0,
+    }));
+    const newPose: SavedPose = { id: crypto.randomUUID(), name: finalName, parts };
     commitRig({ ...rig, poses: [...existingPoses, newPose] }, "Saved pose");
   }
 
   function handleApplyPose(poseId: string) {
     const pose = (rig.poses ?? []).find((p) => p.id === poseId);
     if (!pose) return;
+    const byPartId = new Map(pose.parts.map((pp) => [pp.partId, pp]));
     commitRig({
       ...rig,
       parts: rig.parts.map((p) => {
         if (isPartEffectivelyLocked(p, rig.groups)) return p;
-        if (pose.rotations[p.id] === undefined) return p;
-        return { ...p, rotation: pose.rotations[p.id] };
+        const saved = byPartId.get(p.id);
+        if (!saved) return p;
+        return {
+          ...p,
+          bounds: { ...saved.bounds },
+          movementPoint: { ...saved.movementPoint },
+          polygonPoints: saved.polygonPoints ? saved.polygonPoints.map((pt) => ({ ...pt })) : null,
+          rotation: saved.rotation,
+          depth: saved.depth ?? 0,
+        };
       }),
     }, "Applied pose");
   }
@@ -845,6 +917,27 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     );
   }
 
+  function handleApplyPoseMix() {
+    if (!poseMixFromId || !poseMixToId) return;
+    const mixed = computePoseMix(rig.parts, rig.poses ?? [], poseMixFromId, poseMixToId, poseMixAmount);
+    commitRig({ ...rig, parts: mixed }, "Applied pose mix");
+    setPoseMixFromId("");
+    setPoseMixToId("");
+    setPoseMixAmount(0);
+  }
+
+  function handleResetPoseMix() {
+    setPoseMixFromId("");
+    setPoseMixToId("");
+    setPoseMixAmount(0);
+  }
+
+  function poseRotationsMap(pose: SavedPose): Record<string, number> {
+    const r: Record<string, number> = {};
+    for (const pp of pose.parts) r[pp.partId] = pp.rotation;
+    return r;
+  }
+
   function handleStartPreview(
     fromPoseId: string,
     toPoseId: string,
@@ -860,8 +953,8 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     if (previewRafRef.current !== null) cancelAnimationFrame(previewRafRef.current);
 
     previewConfigRef.current = {
-      fromRotations: fromPose.rotations,
-      toRotations: toPose.rotations,
+      fromRotations: poseRotationsMap(fromPose),
+      toRotations: poseRotationsMap(toPose),
       duration: durationSecs,
       loop,
       startTime: performance.now(),
@@ -916,6 +1009,37 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
     );
   }
 
+  function handleSetMeshEnabled(partId: string, enabled: boolean) {
+    commitRig(
+      { ...rig, parts: rig.parts.map((p) => (p.id === partId ? { ...p, meshEnabled: enabled } : p)) },
+      enabled ? "Enabled volume" : "Disabled volume"
+    );
+  }
+  function handleSetMeshTurnX(partId: string, v: number) {
+    commitRig(
+      { ...rig, parts: rig.parts.map((p) => (p.id === partId ? { ...p, meshTurnX: v } : p)) },
+      "Adjusted horizontal turn"
+    );
+  }
+  function handleSetMeshTurnY(partId: string, v: number) {
+    commitRig(
+      { ...rig, parts: rig.parts.map((p) => (p.id === partId ? { ...p, meshTurnY: v } : p)) },
+      "Adjusted vertical tilt"
+    );
+  }
+  function handleSetMeshCurve(partId: string, v: number) {
+    commitRig(
+      { ...rig, parts: rig.parts.map((p) => (p.id === partId ? { ...p, meshCurve: v } : p)) },
+      "Adjusted curve"
+    );
+  }
+  function handleResetMesh(partId: string) {
+    commitRig(
+      { ...rig, parts: rig.parts.map((p) => (p.id === partId ? { ...p, meshTurnX: 0, meshTurnY: 0, meshCurve: 0 } : p)) },
+      "Reset volume"
+    );
+  }
+
   function handleAddTimelineStep(poseId: string) {
     const poses = rig.poses ?? [];
     if (!poses.some((p) => p.id === poseId)) return;
@@ -963,7 +1087,7 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
 
     const stepRotations = timeline.map((step) => {
       const pose = poses.find((p) => p.id === step.poseId);
-      return pose ? { ...pose.rotations } : {};
+      return pose ? poseRotationsMap(pose) : {};
     });
     const durations = timeline.map((s) => Math.max(0.1, s.duration));
 
@@ -1270,7 +1394,14 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             showStructure={showStructure}
             onPartLink={handlePartLink}
             previewRotations={previewRotations}
+            poseMixParts={
+              poseMixFromId && poseMixToId
+                ? computePoseMix(rig.parts, rig.poses ?? [], poseMixFromId, poseMixToId, poseMixAmount)
+                : null
+            }
             preview2d={preview2d}
+            previewRotationX={previewRotationX}
+            previewRotationY={previewRotationY}
             showSourceImage={sourceImagePreview.showSourceImage}
             sourceImageOpacity={sourceImagePreview.sourceImageOpacity}
           />
@@ -1321,16 +1452,33 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onRotateRight={handleRotateRight}
           onResetRotation={handleResetRotation}
           poses={rig.poses ?? []}
+          poseMixFromId={poseMixFromId}
+          poseMixToId={poseMixToId}
+          poseMixAmount={poseMixAmount}
+          onSetPoseMixFrom={setPoseMixFromId}
+          onSetPoseMixTo={setPoseMixToId}
+          onSetPoseMixAmount={setPoseMixAmount}
+          onApplyPoseMix={handleApplyPoseMix}
+          onResetPoseMix={handleResetPoseMix}
           isPreviewPlaying={!isTimelinePlaying && (previewRafRef.current !== null || previewRotations !== null)}
           onStartPreview={handleStartPreview}
           onStopPreview={handleStopPreview}
-          onSavePose={handleSavePose}
+          onSavePose={(name) => handleSavePose(name)}
           onApplyPose={handleApplyPose}
           onRenamePose={handleRenamePose}
           onDeletePose={handleDeletePose}
           onChangeDepth={handleChangeDepth}
+          onSetMeshEnabled={handleSetMeshEnabled}
+          onSetMeshTurnX={handleSetMeshTurnX}
+          onSetMeshTurnY={handleSetMeshTurnY}
+          onSetMeshCurve={handleSetMeshCurve}
+          onResetMesh={handleResetMesh}
           preview2d={preview2d}
           onSet2dPreview={setPreview2d}
+          previewRotationX={previewRotationX}
+          previewRotationY={previewRotationY}
+          onSetPreviewRotationX={setPreviewRotationX}
+          onSetPreviewRotationY={setPreviewRotationY}
           showSourceImage={sourceImagePreview.showSourceImage}
           sourceImageOpacity={sourceImagePreview.sourceImageOpacity}
           onSetShowSourceImage={(showSourceImage) =>

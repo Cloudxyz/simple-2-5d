@@ -32,6 +32,14 @@ export interface Part {
   /** Polygon vertices in image-local coords. Null for rectangle-created parts.
    *  Polygon crop is future work — PNG export uses bounds as fallback. */
   polygonPoints?: Point[] | null;
+  /** Mesh-based volume deformation. When enabled, the part renders via a warped grid. */
+  meshEnabled?: boolean;
+  /** Horizontal turn (-100 to 100). Positive = face turns right. */
+  meshTurnX?: number;
+  /** Vertical tilt (-100 to 100). Positive = face tilts down. */
+  meshTurnY?: number;
+  /** Center bulge (-100 to 100). Positive = barrel, negative = pinch. */
+  meshCurve?: number;
 }
 
 export interface LayerGroup {
@@ -42,12 +50,19 @@ export interface LayerGroup {
   isVisible?: boolean;
 }
 
+export interface SavedPosePart {
+  partId: string;
+  bounds: BoundingBox;
+  movementPoint: Point;
+  polygonPoints?: Point[] | null;
+  rotation: number;
+  depth?: number;
+}
+
 export interface SavedPose {
   id: string;
   name: string;
-  /** Part id → rotation in degrees at the time this pose was saved */
-  rotations: Record<string, number>;
-  createdAt: number;
+  parts: SavedPosePart[];
 }
 
 export interface TimelineStep {

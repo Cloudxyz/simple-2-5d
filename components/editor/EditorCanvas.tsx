@@ -1,11 +1,125 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback } from "react";
-import { Stage, Layer, Image as KonvaImage, Rect as KonvaRect, Circle as KonvaCircle, Line as KonvaLine, Group } from "react-konva";
+import { Stage, Layer, Image as KonvaImage, Rect as KonvaRect, Circle as KonvaCircle, Line as KonvaLine, Group, Shape } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import type { Stage as StageType } from "konva/lib/Stage";
 import { findGroupById, isPartEffectivelyLocked, isPartEffectivelyVisible } from "@/lib/layers";
 import type { BoundingBox, CharacterRig, LayerGroup, Part, Point } from "@/types/rig";
+
+// ─── Mesh deformation helpers ────────────────────────────────────────────────
+
+function deformUV(
+  u: number, v: number,
+  tx: number, ty: number, tc: number
+): [number, number] {
+  // Work in centered normalized space: nx,ny ∈ [-1, 1]
+  const nx = u * 2.0 - 1.0;
+  const ny = v * 2.0 - 1.0;
+  let dnx = 0.0, dny = 0.0;
+
+  // ── Horizontal turn (tx) ─────────────────────────────────────────────
+  // bell  = center-weighted push (1 at nx=0, 0 at edges)
+  // twist = cubic signed edge bias (+1 at right, -1 at left, 0 at center)
+  // (bell - twist): near side stays, far side compresses, center shifts
+  // max |d(dnx)/d(nx)| = 4·coeff; coeff 0.22 keeps derivative ≥ 0.12 at tx=1
+  if (tx !== 0) {
+    const bell  = 1.0 - nx * nx;
+    const twist = nx * Math.abs(nx);
+    dnx += tx * (bell - twist) * 0.22;
+    // Perspective taper: far-side corners converge toward horizontal center line
+    dny -= tx * twist * ny * 0.08;
+  }
+
+  // ── Vertical tilt (ty) ───────────────────────────────────────────────
+  if (ty !== 0) {
+    const bell  = 1.0 - ny * ny;
+    const twist = ny * Math.abs(ny);
+    dny += ty * (bell - twist) * 0.22;
+    dnx -= ty * twist * nx * 0.08;
+  }
+
+  // ── Curvatura (tc) ────────────────────────────────────────────────────
+  // Positive → center bulges outward (rounder/spherical)
+  // Negative → center pinches inward (flatter/disc-like)
+  // Uses post-turn position (fx,fy) so curvature interacts correctly with turn
+  if (tc !== 0) {
+    const fx = nx + dnx;
+    const fy = ny + dny;
+    dny += tc * (1.0 - fx * fx) * fy * 0.18;
+    dnx += tc * (1.0 - fy * fy) * fx * 0.18;
+  }
+
+  // Convert back to [0,1] space; allow slight overflow for edge triangles
+  const nu = Math.max(-0.5, Math.min(1.5, (nx + dnx + 1.0) * 0.5));
+  const nv = Math.max(-0.5, Math.min(1.5, (ny + dny + 1.0) * 0.5));
+  return [nu, nv];
+}
+
+function drawTexturedTriangle(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  s0: [number, number], s1: [number, number], s2: [number, number],
+  d0: [number, number], d1: [number, number], d2: [number, number]
+): void {
+  const du1 = s1[0] - s0[0], dv1 = s1[1] - s0[1];
+  const du2 = s2[0] - s0[0], dv2 = s2[1] - s0[1];
+  const det = du1 * dv2 - du2 * dv1;
+  if (Math.abs(det) < 0.01) return;
+  const dx1 = d1[0] - d0[0], dy1 = d1[1] - d0[1];
+  const dx2 = d2[0] - d0[0], dy2 = d2[1] - d0[1];
+  const a = (dx1 * dv2 - dx2 * dv1) / det;
+  const b = (dy1 * dv2 - dy2 * dv1) / det;
+  const c = (du1 * dx2 - du2 * dx1) / det;
+  const d = (du1 * dy2 - du2 * dy1) / det;
+  const e = d0[0] - a * s0[0] - c * s0[1];
+  const f = d0[1] - b * s0[0] - d * s0[1];
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(d0[0], d0[1]);
+  ctx.lineTo(d1[0], d1[1]);
+  ctx.lineTo(d2[0], d2[1]);
+  ctx.closePath();
+  ctx.clip();
+  ctx.transform(a, b, c, d, e, f);
+  ctx.drawImage(image, 0, 0);
+  ctx.restore();
+}
+
+function drawMeshPart(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  bounds: BoundingBox,
+  tx: number, ty: number, tc: number,
+  gridN = 16
+): void {
+  const stride = gridN + 1;
+  const sx: number[] = [], sy: number[] = [], dx: number[] = [], dy: number[] = [];
+  for (let row = 0; row <= gridN; row++) {
+    for (let col = 0; col <= gridN; col++) {
+      const u = col / gridN, v = row / gridN;
+      sx.push(bounds.x + u * bounds.width);
+      sy.push(bounds.y + v * bounds.height);
+      const [nu, nv] = deformUV(u, v, tx, ty, tc);
+      dx.push(bounds.x + nu * bounds.width);
+      dy.push(bounds.y + nv * bounds.height);
+    }
+  }
+  for (let row = 0; row < gridN; row++) {
+    for (let col = 0; col < gridN; col++) {
+      const i00 = row * stride + col, i10 = i00 + 1;
+      const i01 = i00 + stride, i11 = i01 + 1;
+      drawTexturedTriangle(ctx, image,
+        [sx[i00], sy[i00]], [sx[i10], sy[i10]], [sx[i01], sy[i01]],
+        [dx[i00], dy[i00]], [dx[i10], dy[i10]], [dx[i01], dy[i01]]);
+      drawTexturedTriangle(ctx, image,
+        [sx[i10], sy[i10]], [sx[i11], sy[i11]], [sx[i01], sy[i01]],
+        [dx[i10], dy[i10]], [dx[i11], dy[i11]], [dx[i01], dy[i01]]);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 const MIN_ZOOM = 0.05;
 const DEPTH_STRENGTH = 0.25;
@@ -61,7 +175,10 @@ interface EditorCanvasProps {
   showStructure?: boolean;
   onPartLink?: (childId: string, parentId: string) => void;
   previewRotations?: Record<string, number> | null;
+  poseMixParts?: Part[] | null;
   preview2d?: Preview2d | null;
+  previewRotationX?: number;
+  previewRotationY?: number;
   showSourceImage?: boolean;
   sourceImageOpacity?: number;
 }
@@ -199,7 +316,7 @@ function isPointInPolygon(point: Point, polygon: Point[]): boolean {
   return inside;
 }
 
-type DepthOffFn = (part: Part) => { ox: number; oy: number };
+type DepthOffFn = (part: Part) => { ox: number; oy: number; sx: number; sy: number };
 
 function isPointInPart(
   point: Point,
@@ -207,11 +324,21 @@ function isPointInPart(
   allParts?: Part[],
   depthOffFn?: DepthOffFn
 ): boolean {
-  // Subtract the depth offset so the test point is back in the part's unshifted coordinate space
-  const { ox = 0, oy = 0 } = depthOffFn?.(part) ?? { ox: 0, oy: 0 };
-  const testPoint = { x: point.x - ox, y: point.y - oy };
-
   const ancestors = allParts ? getAncestorChain(allParts, part.id) : [];
+  const { ox = 0, oy = 0, sx = 1, sy = 1 } = depthOffFn?.(part) ?? { ox: 0, oy: 0, sx: 1, sy: 1 };
+  // Inverse-transform: undo visual scale around wmp, then undo translation offset
+  let testPoint: Point;
+  if (sx !== 1 || sy !== 1) {
+    const rawDmp = ancestors.length > 0
+      ? applyAncestorTransform(part.movementPoint, ancestors)
+      : part.movementPoint;
+    testPoint = {
+      x: rawDmp.x + (point.x - rawDmp.x - ox) / sx,
+      y: rawDmp.y + (point.y - rawDmp.y - oy) / sy,
+    };
+  } else {
+    testPoint = { x: point.x - ox, y: point.y - oy };
+  }
 
   if (ancestors.length > 0 && ancestors.some((a) => a.rotation !== 0)) {
     return isPointInPolygon(testPoint, getPartDisplayPoints(part, allParts));
@@ -313,7 +440,7 @@ function computePartImageTransform(
   part: Part,
   allParts: Part[],
   depthOffFn: DepthOffFn
-): { x: number; y: number; rotation: number } {
+): { x: number; y: number; rotation: number; scaleX: number; scaleY: number } {
   const ancestors = getAncestorChain(allParts, part.id);
   const displayMP = ancestors.length > 0
     ? applyAncestorTransform(part.movementPoint, ancestors)
@@ -323,9 +450,19 @@ function computePartImageTransform(
     ? applyAncestorTransform({ x: 0, y: 0 }, ancestors)
     : { x: 0, y: 0 };
   const rotated = rotatePoint(origin0, displayMP, part.rotation);
-  const { ox, oy } = depthOffFn(part);
+  const { ox, oy, sx, sy } = depthOffFn(part);
   const totalRotation = ancestors.reduce((sum, a) => sum + a.rotation, 0) + part.rotation;
-  return { x: rotated.x + ox, y: rotated.y + oy, rotation: totalRotation };
+  const origX = rotated.x + ox;
+  const origY = rotated.y + oy;
+  const wmpX = displayMP.x + ox;
+  const wmpY = displayMP.y + oy;
+  return {
+    x: sx * origX + wmpX * (1 - sx),
+    y: sy * origY + wmpY * (1 - sy),
+    rotation: totalRotation,
+    scaleX: sx,
+    scaleY: sy,
+  };
 }
 
 function useContainerSize(ref: React.RefObject<HTMLDivElement | null>) {
@@ -399,7 +536,10 @@ export default function EditorCanvas({
   showStructure = false,
   onPartLink,
   previewRotations = null,
+  poseMixParts = null,
   preview2d = null,
+  previewRotationX = 0,
+  previewRotationY = 0,
   showSourceImage = true,
   sourceImageOpacity = 0.35,
 }: EditorCanvasProps) {
@@ -540,8 +680,10 @@ export default function EditorCanvas({
     };
   }
 
-  // During animation preview, overlay preview rotations without mutating rig
-  const displayParts = previewRotations
+  // Pose mix overrides all transform fields; animation preview overlays only rotations
+  const displayParts = poseMixParts
+    ? poseMixParts
+    : previewRotations
     ? rig.parts.map((p) =>
         previewRotations[p.id] !== undefined ? { ...p, rotation: previewRotations[p.id] } : p
       )
@@ -555,7 +697,14 @@ export default function EditorCanvas({
     : [];
   const selectedGroupVisibleParts = selectedGroupParts.filter((part) => isPartEffectivelyVisible(part, rig.groups));
   const selectedGroupOutline = getAxisAlignedBounds(
-    selectedGroupVisibleParts.flatMap((part) => getPartDisplayPoints(part, displayParts))
+    selectedGroupVisibleParts.flatMap((part) => {
+      const { ox, oy, sx, sy } = depthOff(part);
+      const rawDmp = getDisplayMP(part, displayParts);
+      return getPartDisplayPoints(part, displayParts).map((p) => ({
+        x: rawDmp.x + ox + sx * (p.x - rawDmp.x),
+        y: rawDmp.y + oy + sy * (p.y - rawDmp.y),
+      }));
+    })
   );
   const selectedGroupCanMove =
     !!selectedGroup &&
@@ -668,7 +817,7 @@ export default function EditorCanvas({
         displayParts,
         rig.groups,
         imgPos,
-        preview2d?.enabled ? depthOff : undefined
+        hasDepthOffset ? depthOff : undefined
       );
       const hoverTargetId =
         candidate && candidate.id !== selectedPartId && !isPartEffectivelyLocked(candidate, rig.groups)
@@ -719,7 +868,7 @@ export default function EditorCanvas({
       if (selPart?.polygonPoints && selPart.polygonPoints.length >= 3) {
         // Block edge hover when pen editing is disabled due to active ancestor rotation
         const selPartAncestors = getAncestorChain(displayParts, selPart.id);
-        if (selPartAncestors.some((a) => a.rotation !== 0)) {
+        if (selPartAncestors.some((a) => a.rotation !== 0) || hasDepthOffset) {
           if (hoveredEdge) setHoveredEdge(null);
         } else {
         const stage = stageRef.current;
@@ -825,7 +974,7 @@ export default function EditorCanvas({
           displayParts,
           rig.groups,
           dragCurrent,
-          preview2d?.enabled ? depthOff : undefined
+          hasDepthOffset ? depthOff : undefined
         );
         onSelectPart(hitPart?.id ?? null);
       }
@@ -882,15 +1031,27 @@ export default function EditorCanvas({
   const pivotR = PIVOT_RING_R / sc;
   const pivotArm = PIVOT_ARM_LEN / sc;
 
-  function depthOff(part: Part): { ox: number; oy: number } {
-    if (!preview2d?.enabled) return { ox: 0, oy: 0 };
+  function depthOff(part: Part): { ox: number; oy: number; sx: number; sy: number } {
     const d = part.depth ?? 0;
-    const s = preview2d.strength ?? DEPTH_STRENGTH;
-    return {
-      ox: d * preview2d.viewX * s,
-      oy: d * preview2d.viewY * s,
-    };
+    let ox = 0;
+    let oy = 0;
+    if (preview2d?.enabled) {
+      const s = preview2d.strength ?? DEPTH_STRENGTH;
+      ox += d * preview2d.viewX * s;
+      oy += d * preview2d.viewY * s;
+    }
+    ox += d * previewRotationY * 0.01;
+    oy += d * previewRotationX * 0.01;
+    const rotationAmount = Math.max(Math.abs(previewRotationX), Math.abs(previewRotationY));
+    const scaleOffset = d * rotationAmount * 0.00005;
+    const vs = Math.min(1.08, Math.max(0.92, 1 + scaleOffset));
+    const turnAmount = Math.abs(previewRotationY) / 45;
+    const turnScaleX = Math.min(1, Math.max(0.88, 1 - turnAmount * 0.12));
+    return { ox, oy, sx: vs * turnScaleX, sy: vs };
   }
+
+  const hasDepthOffset =
+    !!preview2d?.enabled || previewRotationX !== 0 || previewRotationY !== 0;
 
   if (!rig.imageDataUrl) {
     return (
@@ -937,9 +1098,29 @@ export default function EditorCanvas({
             .filter((part) => isPartEffectivelyVisible(part, rig.groups))
             .sort((a, b) => a.zIndex - b.zIndex)
             .map((part) => {
-              const { x, y, rotation } = computePartImageTransform(part, displayParts, depthOff);
+              const { x, y, rotation, scaleX, scaleY } = computePartImageTransform(part, displayParts, depthOff);
               const iw = konvaImage.naturalWidth;
               const ih = konvaImage.naturalHeight;
+              if (part.meshEnabled) {
+                const meshImg = konvaImage;
+                return (
+                  <Group key={`img-${part.id}`} x={x} y={y} rotation={rotation} scaleX={scaleX} scaleY={scaleY}>
+                    <Shape
+                      sceneFunc={(konvaCtx) => {
+                        const rawCtx = (konvaCtx as unknown as { _context: CanvasRenderingContext2D })._context;
+                        if (!rawCtx) return;
+                        drawMeshPart(
+                          rawCtx, meshImg, part.bounds,
+                          (part.meshTurnX ?? 0) / 100,
+                          (part.meshTurnY ?? 0) / 100,
+                          (part.meshCurve ?? 0) / 100
+                        );
+                      }}
+                      listening={false}
+                    />
+                  </Group>
+                );
+              }
               if (part.polygonPoints && part.polygonPoints.length >= 3) {
                 return (
                   <Group
@@ -947,6 +1128,8 @@ export default function EditorCanvas({
                     x={x}
                     y={y}
                     rotation={rotation}
+                    scaleX={scaleX}
+                    scaleY={scaleY}
                     clipFunc={(ctx) => {
                       const pts = part.polygonPoints!;
                       ctx.beginPath();
@@ -972,6 +1155,8 @@ export default function EditorCanvas({
                   x={x}
                   y={y}
                   rotation={rotation}
+                  scaleX={scaleX}
+                  scaleY={scaleY}
                   clipFunc={(ctx) => {
                     const { bounds } = part;
                     ctx.rect(bounds.x, bounds.y, bounds.width, bounds.height);
@@ -993,12 +1178,18 @@ export default function EditorCanvas({
             const stroke = sel ? "rgba(167,139,250,1)" : "rgba(139,92,246,0.7)";
             const fill = sel ? "rgba(139,92,246,0.18)" : "rgba(139,92,246,0.06)";
             const strokeWidth = sel ? 2 : 1;
-            const { ox, oy } = depthOff(part);
+            const { ox, oy, sx, sy } = depthOff(part);
 
             // Render preview: apply inherited parent rotation transforms
             const partAncestors = getAncestorChain(displayParts, part.id);
             if (partAncestors.some((a) => a.rotation !== 0)) {
-              const flatPts = getPartDisplayPoints(part, displayParts).flatMap((p) => [p.x + ox, p.y + oy]);
+              const rawDmp = partAncestors.length > 0
+                ? applyAncestorTransform(part.movementPoint, partAncestors)
+                : part.movementPoint;
+              const flatPts = getPartDisplayPoints(part, displayParts).flatMap((p) => [
+                rawDmp.x + ox + sx * (p.x - rawDmp.x),
+                rawDmp.y + oy + sy * (p.y - rawDmp.y),
+              ]);
               return (
                 <KonvaLine
                   key={part.id}
@@ -1028,6 +1219,8 @@ export default function EditorCanvas({
                   offsetX={mp.x}
                   offsetY={mp.y}
                   rotation={part.rotation}
+                  scaleX={sx}
+                  scaleY={sy}
                   closed
                   stroke={stroke}
                   strokeWidth={strokeWidth}
@@ -1047,6 +1240,8 @@ export default function EditorCanvas({
                 width={part.bounds.width}
                 height={part.bounds.height}
                 rotation={part.rotation}
+                scaleX={sx}
+                scaleY={sy}
                 stroke={stroke}
                 strokeWidth={strokeWidth}
                 strokeScaleEnabled={false}
@@ -1152,11 +1347,15 @@ export default function EditorCanvas({
             return (
               <>
                 {targetPart && (() => {
-                  const { ox: tox, oy: toy } = depthOff(targetPart);
+                  const { ox: tox, oy: toy, sx: tSx, sy: tSy } = depthOff(targetPart);
+                  const tRawDmp = getDisplayMP(targetPart, displayParts);
                   const pts = getPartDisplayPoints(targetPart, displayParts);
                   return (
                     <KonvaLine
-                      points={pts.flatMap((p) => [p.x + tox, p.y + toy])}
+                      points={pts.flatMap((p) => [
+                        tRawDmp.x + tox + tSx * (p.x - tRawDmp.x),
+                        tRawDmp.y + toy + tSy * (p.y - tRawDmp.y),
+                      ])}
                       closed
                       stroke="rgba(74,222,128,0.85)"
                       strokeWidth={2}
@@ -1224,24 +1423,29 @@ export default function EditorCanvas({
             const vtxAncestors = getAncestorChain(displayParts, part.id);
             const hasActiveAncestorRot = vtxAncestors.some((a) => a.rotation !== 0);
             const inheritedPts = hasActiveAncestorRot ? getPartDisplayPoints(part, displayParts) : null;
-            const { ox: vtxOx, oy: vtxOy } = depthOff(part);
-            const vtxEditBlocked = hasActiveAncestorRot || !!preview2d?.enabled;
+            const { ox: vtxOx, oy: vtxOy, sx: vtxSx, sy: vtxSy } = depthOff(part);
+            const vtxRawDmp = vtxAncestors.length > 0
+              ? applyAncestorTransform(part.movementPoint, vtxAncestors)
+              : part.movementPoint;
+            const vtxEditBlocked = hasActiveAncestorRot || hasDepthOffset;
 
             return (
               <>
                 {part.polygonPoints.map((pt, i) => {
                   let cx: number, cy: number;
                   if (inheritedPts) {
-                    cx = inheritedPts[i].x + vtxOx;
-                    cy = inheritedPts[i].y + vtxOy;
+                    cx = vtxRawDmp.x + vtxOx + vtxSx * (inheritedPts[i].x - vtxRawDmp.x);
+                    cy = vtxRawDmp.y + vtxOy + vtxSy * (inheritedPts[i].y - vtxRawDmp.y);
                   } else {
                     const dx = pt.x - mp.x;
                     const dy = pt.y - mp.y;
                     const defaultX = cos * dx - sin * dy + mp.x;
                     const defaultY = sin * dx + cos * dy + mp.y;
                     const isLive = liveVertex?.partId === part.id && liveVertex.idx === i;
-                    cx = (isLive ? liveVertex!.stagePos.x : defaultX) + vtxOx;
-                    cy = (isLive ? liveVertex!.stagePos.y : defaultY) + vtxOy;
+                    const baseX = isLive ? liveVertex!.stagePos.x : defaultX;
+                    const baseY = isLive ? liveVertex!.stagePos.y : defaultY;
+                    cx = vtxRawDmp.x + vtxOx + vtxSx * (baseX - vtxRawDmp.x);
+                    cy = vtxRawDmp.y + vtxOy + vtxSy * (baseY - vtxRawDmp.y);
                   }
 
                   const canEdit = !vtxEditBlocked && !isPartEffectivelyLocked(part, rig.groups);
@@ -1386,7 +1590,7 @@ export default function EditorCanvas({
             const { ox: pivOx, oy: pivOy } = depthOff(selectedPart);
             const dmp = { x: rawDmp.x + pivOx, y: rawDmp.y + pivOy };
             const isPointTool = activeTool === "point";
-            const pivotDragBlocked = !!preview2d?.enabled;
+            const pivotDragBlocked = hasDepthOffset;
             const color = isPointTool ? "rgba(251,191,36,1)" : "rgba(251,191,36,0.55)";
             const fillColor = isPointTool ? "rgba(251,191,36,0.2)" : "rgba(251,191,36,0.08)";
 
