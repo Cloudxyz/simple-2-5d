@@ -30,6 +30,11 @@ interface StageTransform {
   scale: number;
 }
 
+interface SourceImagePreview {
+  showSourceImage: boolean;
+  sourceImageOpacity: number;
+}
+
 type SaveStatus = "idle" | "saved" | "empty" | "error";
 type LayerOrderBlock = { type: "group" | "part"; id: string; partIds: string[] };
 
@@ -192,6 +197,10 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
   } | null>(null);
 
   const [preview2d, setPreview2d] = useState<Preview2d>({ enabled: false, viewX: 0, viewY: 0, strength: 0.25 });
+  const [sourceImagePreview, setSourceImagePreview] = useState<SourceImagePreview>({
+    showSourceImage: true,
+    sourceImageOpacity: 0.35,
+  });
 
   function stopPreview() {
     if (previewRafRef.current !== null) {
@@ -1262,6 +1271,8 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
             onPartLink={handlePartLink}
             previewRotations={previewRotations}
             preview2d={preview2d}
+            showSourceImage={sourceImagePreview.showSourceImage}
+            sourceImageOpacity={sourceImagePreview.sourceImageOpacity}
           />
           </div>
 
@@ -1320,6 +1331,14 @@ export default function EditorLayout({ characterName, freshStart = false }: Edit
           onChangeDepth={handleChangeDepth}
           preview2d={preview2d}
           onSet2dPreview={setPreview2d}
+          showSourceImage={sourceImagePreview.showSourceImage}
+          sourceImageOpacity={sourceImagePreview.sourceImageOpacity}
+          onSetShowSourceImage={(showSourceImage) =>
+            setSourceImagePreview((prev) => ({ ...prev, showSourceImage }))
+          }
+          onSetSourceImageOpacity={(sourceImageOpacity) =>
+            setSourceImagePreview((prev) => ({ ...prev, sourceImageOpacity }))
+          }
           history={hist.entries}
           historyIndex={hist.index}
           onHistoryJump={handleHistoryJump}

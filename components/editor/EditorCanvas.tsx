@@ -62,6 +62,8 @@ interface EditorCanvasProps {
   onPartLink?: (childId: string, parentId: string) => void;
   previewRotations?: Record<string, number> | null;
   preview2d?: Preview2d | null;
+  showSourceImage?: boolean;
+  sourceImageOpacity?: number;
 }
 
 interface LinkDrag {
@@ -398,6 +400,8 @@ export default function EditorCanvas({
   onPartLink,
   previewRotations = null,
   preview2d = null,
+  showSourceImage = true,
+  sourceImageOpacity = 0.35,
 }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<StageType | null>(null);
@@ -909,13 +913,14 @@ export default function EditorCanvas({
       >
         <Layer>
           {/* Character image */}
-          {konvaImage && (
+          {showSourceImage && konvaImage && (
             <KonvaImage
               image={konvaImage}
               x={0}
               y={0}
               width={konvaImage.naturalWidth}
               height={konvaImage.naturalHeight}
+              opacity={sourceImageOpacity}
               listening={false}
             />
           )}

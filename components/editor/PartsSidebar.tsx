@@ -62,6 +62,10 @@ interface PartsSidebarProps {
   onChangeDepth: (partId: string, depth: number) => void;
   preview2d: Preview2d;
   onSet2dPreview: (p: Preview2d) => void;
+  showSourceImage: boolean;
+  sourceImageOpacity: number;
+  onSetShowSourceImage: (show: boolean) => void;
+  onSetSourceImageOpacity: (opacity: number) => void;
   isPreviewPlaying: boolean;
   onStartPreview: (fromPoseId: string, toPoseId: string, durationSecs: number, loop: boolean) => void;
   onStopPreview: () => void;
@@ -145,6 +149,10 @@ export default function PartsSidebar({
   onChangeDepth,
   preview2d,
   onSet2dPreview,
+  showSourceImage,
+  sourceImageOpacity,
+  onSetShowSourceImage,
+  onSetSourceImageOpacity,
   isPreviewPlaying,
   onStartPreview,
   onStopPreview,
@@ -1228,6 +1236,37 @@ export default function PartsSidebar({
             </div>
           </>
         )}
+      </div>
+
+      <div className="border-t border-zinc-800 flex-shrink-0 px-3 py-2 space-y-2">
+        <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">View</p>
+        <label className="flex items-center justify-between gap-3 text-[11px] text-zinc-400 cursor-pointer">
+          <span>Show source image</span>
+          <input
+            type="checkbox"
+            checked={showSourceImage}
+            onChange={(e) => onSetShowSourceImage(e.target.checked)}
+            className="accent-violet-500"
+          />
+        </label>
+        <div className={`${showSourceImage ? "" : "opacity-50"}`}>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-zinc-600">Source opacity</span>
+            <span className="text-[11px] text-zinc-500 tabular-nums">
+              {sourceImageOpacity.toFixed(2)}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={sourceImageOpacity}
+            disabled={!showSourceImage}
+            onChange={(e) => onSetSourceImageOpacity(parseFloat(e.target.value))}
+            className="mt-1 w-full accent-violet-500 disabled:opacity-40"
+          />
+        </div>
       </div>
 
       {/* History panel */}
